@@ -240,12 +240,45 @@ app.post("/auth/login", async (req, res) => {
       return res.status(401).json({ error: error.message });
     }
 
+    // Cek apakah email sudah diverifikasi
+    if (!data.user.email_confirmed_at) {
+      return res.status(401).json({ 
+        error: "Email belum diverifikasi. Silakan cek inbox email Anda dan klik link verifikasi.",
+        code: "EMAIL_NOT_VERIFIED"
+      });
+    }
+
     res.json({
       token: data.session.access_token,
       user: data.user,
     });
   } catch (err) {
     console.error("Login error:", err);
+    res.status(500).json({ error: "Internal server error" });
+  }
+});
+
+// Resend verification email
+app.post("/auth/resend-verification", async (req, res) => {
+  const { email } = req.body;
+
+  if (!email) {
+    return res.status(400).json({ error: "Email is required" });
+  }
+
+  try {
+    const { error } = await supabase.auth.resend({
+      type: 'signup',
+      email: email,
+    });
+
+    if (error) {
+      return res.status(400).json({ error: error.message });
+    }
+
+    res.json({ message: "Verification email sent successfully" });
+  } catch (err) {
+    console.error("Resend verification error:", err);
     res.status(500).json({ error: "Internal server error" });
   }
 });
