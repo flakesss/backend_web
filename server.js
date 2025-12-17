@@ -191,10 +191,15 @@ const requireAdmin = async (req, res, next) => {
 
 // Register new user
 app.post("/auth/register", async (req, res) => {
-  const { email, password, full_name } = req.body;
+  const { email, password, full_name, captchaToken } = req.body;
 
   if (!email || !password) {
     return res.status(400).json({ error: "Email and password are required" });
+  }
+
+  // Captcha token wajib untuk mencegah spam
+  if (!captchaToken) {
+    return res.status(400).json({ error: "Captcha verification required" });
   }
 
   try {
@@ -205,6 +210,7 @@ app.post("/auth/register", async (req, res) => {
         data: {
           full_name: full_name || "",
         },
+        captchaToken: captchaToken,  // Kirim ke Supabase untuk validasi
       },
     });
 
