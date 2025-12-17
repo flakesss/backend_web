@@ -230,16 +230,24 @@ app.post("/auth/register", async (req, res) => {
 
 // Login
 app.post("/auth/login", async (req, res) => {
-  const { email, password } = req.body;
+  const { email, password, captchaToken } = req.body;
 
   if (!email || !password) {
     return res.status(400).json({ error: "Email and password are required" });
+  }
+
+  // Captcha token wajib untuk keamanan
+  if (!captchaToken) {
+    return res.status(400).json({ error: "Captcha verification required" });
   }
 
   try {
     const { data, error } = await supabase.auth.signInWithPassword({
       email,
       password,
+      options: {
+        captchaToken: captchaToken,
+      },
     });
 
     if (error) {
