@@ -299,15 +299,21 @@ app.post("/auth/resend-verification", async (req, res) => {
 
 // Forgot Password - Send reset email
 app.post("/auth/forgot-password", async (req, res) => {
-  const { email } = req.body;
+  const { email, captchaToken } = req.body;
 
   if (!email) {
     return res.status(400).json({ error: "Email is required" });
   }
 
+  // Captcha wajib untuk mencegah spam
+  if (!captchaToken) {
+    return res.status(400).json({ error: "Captcha verification required" });
+  }
+
   try {
     const { error } = await supabase.auth.resetPasswordForEmail(email, {
       redirectTo: `${process.env.FRONTEND_URL || 'https://flocify.id'}/reset-password`,
+      captchaToken: captchaToken,
     });
 
     if (error) {
