@@ -297,6 +297,59 @@ app.post("/auth/resend-verification", async (req, res) => {
   }
 });
 
+// Forgot Password - Send reset email
+app.post("/auth/forgot-password", async (req, res) => {
+  const { email } = req.body;
+
+  if (!email) {
+    return res.status(400).json({ error: "Email is required" });
+  }
+
+  try {
+    const { error } = await supabase.auth.resetPasswordForEmail(email, {
+      redirectTo: `${process.env.FRONTEND_URL || 'https://flocify.id'}/reset-password`,
+    });
+
+    if (error) {
+      return res.status(400).json({ error: error.message });
+    }
+
+    res.json({ message: "Password reset email sent. Please check your inbox." });
+  } catch (err) {
+    console.error("Forgot password error:", err);
+    res.status(500).json({ error: "Internal server error" });
+  }
+});
+
+// Change Password - For logged in users
+app.post("/auth/change-password", requireAuth, async (req, res) => {
+  const { newPassword } = req.body;
+
+  if (!newPassword || newPassword.length < 6) {
+    return res.status(400).json({ error: "Password must be at least 6 characters" });
+  }
+
+  try {
+    // Get token from header
+    const token = req.headers.authorization?.split(" ")[1];
+    
+    // Create authenticated client
+    const { data, error } = await supabase.auth.updateUser(
+      { password: newPassword },
+      { accessToken: token }
+    );
+
+    if (error) {
+      return res.status(400).json({ error: error.message });
+    }
+
+    res.json({ message: "Password updated successfully" });
+  } catch (err) {
+    console.error("Change password error:", err);
+    res.status(500).json({ error: "Internal server error" });
+  }
+});
+
 // Get current user profile
 app.get("/auth/me", requireAuth, async (req, res) => {
   try {
