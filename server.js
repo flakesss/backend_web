@@ -256,7 +256,7 @@ app.post("/auth/login", async (req, res) => {
 
     // Cek apakah email sudah diverifikasi
     if (!data.user.email_confirmed_at) {
-      return res.status(401).json({ 
+      return res.status(401).json({
         error: "Email belum diverifikasi. Silakan cek inbox email Anda dan klik link verifikasi.",
         code: "EMAIL_NOT_VERIFIED"
       });
@@ -338,7 +338,7 @@ app.post("/auth/change-password", requireAuth, async (req, res) => {
   try {
     // Get token from header
     const token = req.headers.authorization?.split(" ")[1];
-    
+
     // Create authenticated client
     const { data, error } = await supabase.auth.updateUser(
       { password: newPassword },
@@ -450,16 +450,34 @@ app.post("/bank-accounts", requireAuth, async (req, res) => {
 
 // Create new order (Seller)
 app.post("/orders", requireAuth, async (req, res) => {
-  const { title, description, total_amount, bank_account_id } = req.body;
+  const { title, description, product_price, platform_fee, total_amount, bank_account_id } = req.body;
 
-  if (!title || !total_amount) {
-    return res.status(400).json({ error: "Title and amount are required" });
+  if (!title) {
+    return res.status(400).json({ error: "Title is required" });
+  }
+
+  // Validate amount - accept either new format (product_price + platform_fee) or old format (total_amount)
+  let finalProductPrice, finalPlatformFee, finalTotalAmount;
+
+  if (product_price !== undefined && platform_fee !== undefined && total_amount !== undefined) {
+    // New format with fee breakdown
+    finalProductPrice = parseInt(product_price);
+    finalPlatformFee = parseInt(platform_fee);
+    finalTotalAmount = parseInt(total_amount);
+  } else if (total_amount !== undefined) {
+    // Old format - backward compatibility
+    finalTotalAmount = parseInt(total_amount);
+    // Calculate fee (2.5%) for old orders
+    finalPlatformFee = Math.ceil(finalTotalAmount * 0.025);
+    finalProductPrice = finalTotalAmount - finalPlatformFee;
+  } else {
+    return res.status(400).json({ error: "Amount information is required" });
   }
 
   try {
     const orderNumber = generateOrderNumber();
 
-    // Create order
+    // Create order with fee breakdown
     const { data: order, error: orderError } = await req.authClient
       .from("orders")
       .insert({
@@ -467,7 +485,9 @@ app.post("/orders", requireAuth, async (req, res) => {
         order_number: orderNumber,
         title,
         description: description || "",
-        total_amount: parseInt(total_amount),
+        product_price: finalProductPrice,
+        platform_fee: finalPlatformFee,
+        total_amount: finalTotalAmount,
         status: "awaiting_payment",
         bank_account_id: bank_account_id || null,
       })
@@ -485,7 +505,7 @@ app.post("/orders", requireAuth, async (req, res) => {
       .insert({
         order_id: order.id,
         bank_account_id: bank_account_id || null,
-        amount: parseInt(total_amount),
+        amount: finalTotalAmount,
         status: "pending",
       })
       .select()
@@ -504,7 +524,7 @@ app.post("/orders", requireAuth, async (req, res) => {
       `Pesanan ${orderNumber} telah dibuat. Bagikan link pembayaran ke pembeli.`,
       order.id,
       orderNumber,
-      { amount: total_amount }
+      { amount: finalTotalAmount, product_price: finalProductPrice, platform_fee: finalPlatformFee }
     );
 
     res.status(201).json({
