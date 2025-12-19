@@ -189,12 +189,13 @@ const requireAdmin = async (req, res, next) => {
 // ROUTES: Authentication
 // ============================================================
 
-// Register new user
+// Register new user with phone, email, username
 app.post("/auth/register", async (req, res) => {
-  const { email, password, full_name, captchaToken } = req.body;
+  const { phone, email, username, password, full_name, captchaToken } = req.body;
 
-  if (!email || !password) {
-    return res.status(400).json({ error: "Email and password are required" });
+  // Validate required fields
+  if (!phone || !email || !username || !password) {
+    return res.status(400).json({ error: "Phone, email, username, and password are required" });
   }
 
   // Captcha token wajib untuk mencegah spam
@@ -203,24 +204,138 @@ app.post("/auth/register", async (req, res) => {
   }
 
   try {
-    const { data, error } = await supabase.auth.signUp({
-      email,
-      password,
-      options: {
-        data: {
-          full_name: full_name || "",
-        },
-        captchaToken: captchaToken,  // Kirim ke Supabase untuk validasi
-      },
-    });
+    // Step 1: Check if username is already taken
+    const { data: existingUsername } = await supabaseAdmin
+      .from("profiles")
+      .select("id")
+      .eq("username", username)
+      .single();
 
-    if (error) {
-      return res.status(400).json({ error: error.message });
+    if (existingUsername) {
+      return res.status(400).json({ error: "Username already taken" });
     }
 
+    // Step 2: Check if phone is already registered
+    const { data: existingPhone } = await supabaseAdmin
+      .from("profiles")
+      .select("id")
+      .eq("phone", phone)
+      .single();
+
+    if (existingPhone) {
+      return res.status(400).json({ error: "Phone number already registered" });
+    }
+
+    // Step 3: Check if email exists (for merging existing users)
+    const { data: existingEmailUser, error: emailCheckError } = await supabaseAdmin.auth.admin.listUsers();
+    const userWithEmail = existingEmailUser?.users?.find(u => u.email === email);
+
+    if (userWithEmail) {
+      // Existing user - merge by updating their profile with phone and username
+      console.log("Merging existing user:", email);
+
+      // Update profile with phone and username
+      const { error: updateError } = await supabaseAdmin
+        .from("profiles")
+        .update({
+          phone: phone,
+          username: username,
+          updated_at: new Date().toISOString()
+        })
+        .eq("id", userWithEmail.id);
+
+      if (updateError) {
+        console.error("Profile update error:", updateError);
+        return res.status(500).json({ error: "Failed to update profile" });
+      }
+
+      // Update auth user metadata
+      const { error: metaError } = await supabaseAdmin.auth.admin.updateUserById(
+        userWithEmail.id,
+        {
+          phone: phone,
+          user_metadata: {
+            ...userWithEmail.user_metadata,
+            username: username,
+            full_name: full_name || userWithEmail.user_metadata?.full_name
+          }
+        }
+      );
+
+      if (metaError) {
+        console.error("Metadata update error:", metaError);
+      }
+
+      return res.status(200).json({
+        message: "Account updated successfully. Please verify your phone number.",
+        user: userWithEmail,
+        merged: true,
+        requires_phone_verification: true
+      });
+    }
+
+    // Step 4: New user - Register with Supabase Phone Auth
+    // First, create the user account with email
+    // NOTE: Don't send captchaToken to phone auth - it blocks OTP delivery
+    const { data: signUpData, error: signUpError } = await supabaseAdmin.auth.admin.createUser({
+      email: email,
+      password: password,
+      phone: phone,
+      email_confirm: false, // We'll verify via phone OTP instead
+      phone_confirm: false, // Will be confirmed via OTP
+      user_metadata: {
+        email: email,
+        username: username,
+        full_name: full_name || "",
+      }
+      // ❌ DO NOT include captchaToken here - it blocks Supabase phone auth
+    });
+
+    if (signUpError) {
+      console.error("Supabase createUser error:", signUpError);
+      return res.status(400).json({ error: signUpError.message });
+    }
+
+    // Update profile with phone, email and username
+    if (signUpData.user) {
+      const { error: profileError } = await supabaseAdmin
+        .from("profiles")
+        .update({
+          phone: phone,
+          email: email,
+          username: username
+        })
+        .eq("id", signUpData.user.id);
+
+      if (profileError) {
+        console.error("Profile update error:", profileError);
+      }
+    }
+
+    // Now send OTP to the phone number
+    // NOTE: Don't include captchaToken - it's already validated in our backend
+    const { data: otpData, error: otpError } = await supabase.auth.signInWithOtp({
+      phone: phone,
+      // ❌ DO NOT include captchaToken here - causes OTP delivery to fail
+    });
+
+    if (otpError) {
+      console.error("OTP send error:", otpError);
+      // User is created but OTP failed - still return success but warn
+      return res.status(201).json({
+        message: "Registration successful but failed to send OTP. Please try resend OTP.",
+        user: signUpData.user,
+        requires_phone_verification: true,
+        otp_error: otpError.message
+      });
+    }
+
+    console.log("OTP sent successfully to:", phone);
+
     res.status(201).json({
-      message: "Registration successful",
-      user: data.user,
+      message: "Registration successful. Please verify the OTP sent to your phone.",
+      user: signUpData.user,
+      requires_phone_verification: true
     });
   } catch (err) {
     console.error("Register error:", err);
@@ -228,12 +343,13 @@ app.post("/auth/register", async (req, res) => {
   }
 });
 
-// Login
-app.post("/auth/login", async (req, res) => {
-  const { email, password, captchaToken } = req.body;
 
-  if (!email || !password) {
-    return res.status(400).json({ error: "Email and password are required" });
+// Login with phone, email, or username
+app.post("/auth/login", async (req, res) => {
+  const { identifier, password, captchaToken } = req.body;
+
+  if (!identifier || !password) {
+    return res.status(400).json({ error: "Identifier and password are required" });
   }
 
   // Captcha token wajib untuk keamanan
@@ -242,29 +358,100 @@ app.post("/auth/login", async (req, res) => {
   }
 
   try {
-    const { data, error } = await supabase.auth.signInWithPassword({
-      email,
-      password,
-      options: {
-        captchaToken: captchaToken,
-      },
-    });
+    let loginData, loginError;
 
-    if (error) {
-      return res.status(401).json({ error: error.message });
+    // Smart identifier detection
+    if (identifier.includes('@')) {
+      // Email login
+      console.log("Login attempt with email:", identifier);
+      const result = await supabase.auth.signInWithPassword({
+        email: identifier,
+        password,
+        options: {
+          captchaToken: captchaToken,
+        },
+      });
+      loginData = result.data;
+      loginError = result.error;
+    } else if (/^[0-9+]/.test(identifier)) {
+      // Phone login
+      console.log("Login attempt with phone:", identifier);
+      const result = await supabase.auth.signInWithPassword({
+        phone: identifier,
+        password,
+        options: {
+          captchaToken: captchaToken,
+        },
+      });
+      loginData = result.data;
+      loginError = result.error;
+    } else {
+      // Username login - need to find user first
+      console.log("Login attempt with username:", identifier);
+
+      // Find user by username
+      const { data: profile, error: profileError } = await supabaseAdmin
+        .from("profiles")
+        .select("*")
+        .eq("username", identifier)
+        .single();
+
+      if (profileError || !profile) {
+        return res.status(401).json({ error: "Invalid credentials" });
+      }
+
+      // Login with their phone or email
+      if (profile.phone) {
+        const result = await supabase.auth.signInWithPassword({
+          phone: profile.phone,
+          password,
+          options: {
+            captchaToken: captchaToken,
+          },
+        });
+        loginData = result.data;
+        loginError = result.error;
+      } else if (profile.email) {
+        const result = await supabase.auth.signInWithPassword({
+          email: profile.email,
+          password,
+          options: {
+            captchaToken: captchaToken,
+          },
+        });
+        loginData = result.data;
+        loginError = result.error;
+      } else {
+        return res.status(401).json({ error: "User account is incomplete" });
+      }
     }
 
-    // Cek apakah email sudah diverifikasi
-    if (!data.user.email_confirmed_at) {
+    if (loginError) {
+      return res.status(401).json({ error: loginError.message });
+    }
+
+    // Check if phone is verified (for phone-based auth)
+    if (loginData.user?.phone && !loginData.user?.phone_confirmed_at) {
       return res.status(401).json({
-        error: "Email belum diverifikasi. Silakan cek inbox email Anda dan klik link verifikasi.",
-        code: "EMAIL_NOT_VERIFIED"
+        error: "Phone number not verified. Please verify your phone number.",
+        code: "PHONE_NOT_VERIFIED",
+        phone: loginData.user.phone
       });
     }
 
+    // Get full profile data
+    const { data: profile } = await supabaseAdmin
+      .from("profiles")
+      .select("*")
+      .eq("id", loginData.user.id)
+      .single();
+
     res.json({
-      token: data.session.access_token,
-      user: data.user,
+      token: loginData.session.access_token,
+      user: {
+        ...loginData.user,
+        ...profile
+      },
     });
   } catch (err) {
     console.error("Login error:", err);
@@ -272,86 +459,98 @@ app.post("/auth/login", async (req, res) => {
   }
 });
 
-// Resend verification email
-app.post("/auth/resend-verification", async (req, res) => {
-  const { email } = req.body;
+// Verify phone OTP 
+app.post("/auth/verify-otp", async (req, res) => {
+  const { phone, token } = req.body;
 
-  if (!email) {
-    return res.status(400).json({ error: "Email is required" });
+  if (!phone || !token) {
+    return res.status(400).json({ error: "Phone and OTP token are required" });
   }
 
   try {
-    const { error } = await supabase.auth.resend({
-      type: 'signup',
-      email: email,
+    // Verify OTP via Supabase
+    const { data, error } = await supabase.auth.verifyOtp({
+      phone,
+      token,
+      type: 'sms'
     });
 
     if (error) {
       return res.status(400).json({ error: error.message });
     }
 
-    res.json({ message: "Verification email sent successfully" });
+    res.json({
+      message: "Phone verified successfully",
+      session: data.session,
+      user: data.user
+    });
   } catch (err) {
-    console.error("Resend verification error:", err);
+    console.error("OTP verification error:", err);
     res.status(500).json({ error: "Internal server error" });
   }
 });
 
-// Forgot Password - Send reset email
-app.post("/auth/forgot-password", async (req, res) => {
-  const { email, captchaToken } = req.body;
+// Resend OTP
+app.post("/auth/resend-otp", async (req, res) => {
+  const { phone } = req.body;
 
-  if (!email) {
-    return res.status(400).json({ error: "Email is required" });
-  }
-
-  // Captcha wajib untuk mencegah spam
-  if (!captchaToken) {
-    return res.status(400).json({ error: "Captcha verification required" });
+  if (!phone) {
+    return res.status(400).json({ error: "Phone number is required" });
   }
 
   try {
-    const { error } = await supabase.auth.resetPasswordForEmail(email, {
-      redirectTo: `${process.env.FRONTEND_URL || 'https://flocify.id'}/reset-password`,
-      captchaToken: captchaToken,
+    const { data, error } = await supabase.auth.signInWithOtp({
+      phone: phone,
     });
 
     if (error) {
       return res.status(400).json({ error: error.message });
     }
 
-    res.json({ message: "Password reset email sent. Please check your inbox." });
+    res.json({
+      message: "OTP sent successfully"
+    });
   } catch (err) {
-    console.error("Forgot password error:", err);
+    console.error("Resend OTP error:", err);
     res.status(500).json({ error: "Internal server error" });
   }
 });
 
-// Change Password - For logged in users
-app.post("/auth/change-password", requireAuth, async (req, res) => {
-  const { newPassword } = req.body;
+// Check availability (for real-time validation)
+app.post("/auth/check-availability", async (req, res) => {
+  const { type, value } = req.body;
 
-  if (!newPassword || newPassword.length < 6) {
-    return res.status(400).json({ error: "Password must be at least 6 characters" });
+  if (!type || !value) {
+    return res.status(400).json({ error: "Type and value are required" });
   }
 
   try {
-    // Get token from header
-    const token = req.headers.authorization?.split(" ")[1];
+    let exists = false;
 
-    // Create authenticated client
-    const { data, error } = await supabase.auth.updateUser(
-      { password: newPassword },
-      { accessToken: token }
-    );
-
-    if (error) {
-      return res.status(400).json({ error: error.message });
+    if (type === 'username') {
+      const { data } = await supabaseAdmin
+        .from("profiles")
+        .select("id")
+        .eq("username", value)
+        .single();
+      exists = !!data;
+    } else if (type === 'phone') {
+      const { data } = await supabaseAdmin
+        .from("profiles")
+        .select("id")
+        .eq("phone", value)
+        .single();
+      exists = !!data;
+    } else if (type === 'email') {
+      const { data: users } = await supabaseAdmin.auth.admin.listUsers();
+      exists = users.users.some(u => u.email === value);
     }
 
-    res.json({ message: "Password updated successfully" });
+    res.json({
+      available: !exists
+    });
   } catch (err) {
-    console.error("Change password error:", err);
+    console.error("Check availability error:", err);
     res.status(500).json({ error: "Internal server error" });
   }
 });
@@ -441,6 +640,28 @@ app.post("/bank-accounts", requireAuth, async (req, res) => {
   } catch (err) {
     console.error("Add bank account error:", err);
     res.status(500).json({ error: err.message || "Failed to add bank account" });
+  }
+});
+
+// ============================================================
+// ROUTES: Company Bank Accounts (for transfer display)
+// ============================================================
+
+// Get active company bank accounts (public - no auth required)
+app.get("/company-bank-accounts", async (req, res) => {
+  try {
+    const { data, error } = await supabaseAdmin
+      .from("company_bank_accounts")
+      .select("*")
+      .eq("is_active", true)
+      .order("priority", { ascending: true });
+
+    if (error) throw error;
+
+    res.json(data || []);
+  } catch (err) {
+    console.error("Fetch company bank accounts error:", err);
+    res.status(500).json({ error: "Failed to fetch company bank accounts" });
   }
 });
 
