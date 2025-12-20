@@ -189,13 +189,13 @@ const requireAdmin = async (req, res, next) => {
 // ROUTES: Authentication
 // ============================================================
 
-// Register new user with phone, email, username
+// Register new user with phone, username (email optional)
 app.post("/auth/register", async (req, res) => {
   const { phone, email, username, password, full_name, captchaToken } = req.body;
 
-  // Validate required fields
-  if (!phone || !email || !username || !password) {
-    return res.status(400).json({ error: "Phone, email, username, and password are required" });
+  // Validate required fields (email is now OPTIONAL)
+  if (!phone || !username || !password) {
+    return res.status(400).json({ error: "Phone, username, and password are required" });
   }
 
   // Captcha token wajib untuk mencegah spam
@@ -226,69 +226,72 @@ app.post("/auth/register", async (req, res) => {
       return res.status(400).json({ error: "Phone number already registered" });
     }
 
-    // Step 3: Check if email exists (for merging existing users)
-    const { data: existingEmailUser, error: emailCheckError } = await supabaseAdmin.auth.admin.listUsers();
-    const userWithEmail = existingEmailUser?.users?.find(u => u.email === email);
+    // Step 3: If email provided, check if it exists
+    if (email) {
+      const { data: existingEmailUser, error: emailCheckError } = await supabaseAdmin.auth.admin.listUsers();
+      const userWithEmail = existingEmailUser?.users?.find(u => u.email === email);
 
-    if (userWithEmail) {
-      // Existing user - merge by updating their profile with phone and username
-      console.log("Merging existing user:", email);
+      if (userWithEmail) {
+        // Existing user - merge by updating their profile with phone and username
+        console.log("Merging existing user:", email);
 
-      // Update profile with phone and username
-      const { error: updateError } = await supabaseAdmin
-        .from("profiles")
-        .update({
-          phone: phone,
-          username: username,
-          updated_at: new Date().toISOString()
-        })
-        .eq("id", userWithEmail.id);
-
-      if (updateError) {
-        console.error("Profile update error:", updateError);
-        return res.status(500).json({ error: "Failed to update profile" });
-      }
-
-      // Update auth user metadata
-      const { error: metaError } = await supabaseAdmin.auth.admin.updateUserById(
-        userWithEmail.id,
-        {
-          phone: phone,
-          user_metadata: {
-            ...userWithEmail.user_metadata,
+        // Update profile with phone and username
+        const { error: updateError } = await supabaseAdmin
+          .from("profiles")
+          .update({
+            phone: phone,
             username: username,
-            full_name: full_name || userWithEmail.user_metadata?.full_name
-          }
+            updated_at: new Date().toISOString()
+          })
+          .eq("id", userWithEmail.id);
+
+        if (updateError) {
+          console.error("Profile update error:", updateError);
+          return res.status(500).json({ error: "Failed to update profile" });
         }
-      );
 
-      if (metaError) {
-        console.error("Metadata update error:", metaError);
+        // Update auth user metadata
+        const { error: metaError } = await supabaseAdmin.auth.admin.updateUserById(
+          userWithEmail.id,
+          {
+            phone: phone,
+            user_metadata: {
+              ...userWithEmail.user_metadata,
+              username: username,
+              full_name: full_name || userWithEmail.user_metadata?.full_name
+            }
+          }
+        );
+
+        if (metaError) {
+          console.error("Metadata update error:", metaError);
+        }
+
+        return res.status(200).json({
+          message: "Account updated successfully. Please verify your phone number.",
+          user: userWithEmail,
+          merged: true,
+          requires_phone_verification: true
+        });
       }
-
-      return res.status(200).json({
-        message: "Account updated successfully. Please verify your phone number.",
-        user: userWithEmail,
-        merged: true,
-        requires_phone_verification: true
-      });
     }
 
-    // Step 4: New user - Register with Supabase Phone Auth
-    // First, create the user account with email
-    // NOTE: Don't send captchaToken to phone auth - it blocks OTP delivery
+    // Step 4: New user - Register with phone (email optional)
+    // Generate a dummy email if not provided (Supabase requires email field)
+    const userEmail = email || `${phone.replace(/\+/g, '')}@temp.flocify.local`;
+
     const { data: signUpData, error: signUpError } = await supabaseAdmin.auth.admin.createUser({
-      email: email,
+      email: userEmail,
       password: password,
       phone: phone,
-      email_confirm: false, // We'll verify via phone OTP instead
+      email_confirm: email ? false : true, // Auto-confirm if dummy email
       phone_confirm: false, // Will be confirmed via OTP
       user_metadata: {
-        email: email,
+        email: email || null, // Store actual email (or null)
         username: username,
         full_name: full_name || "",
+        has_email: !!email, // Flag to track if user provided email
       }
-      // ❌ DO NOT include captchaToken here - it blocks Supabase phone auth
     });
 
     if (signUpError) {
@@ -302,7 +305,7 @@ app.post("/auth/register", async (req, res) => {
         .from("profiles")
         .update({
           phone: phone,
-          email: email,
+          email: email || null, // Store real email or null
           username: username
         })
         .eq("id", signUpData.user.id);
@@ -313,10 +316,8 @@ app.post("/auth/register", async (req, res) => {
     }
 
     // Now send OTP to the phone number
-    // NOTE: Don't include captchaToken - it's already validated in our backend
     const { data: otpData, error: otpError } = await supabase.auth.signInWithOtp({
       phone: phone,
-      // ❌ DO NOT include captchaToken here - causes OTP delivery to fail
     });
 
     if (otpError) {
@@ -326,7 +327,8 @@ app.post("/auth/register", async (req, res) => {
         message: "Registration successful but failed to send OTP. Please try resend OTP.",
         user: signUpData.user,
         requires_phone_verification: true,
-        otp_error: otpError.message
+        otp_error: otpError.message,
+        has_email: !!email
       });
     }
 
@@ -335,13 +337,15 @@ app.post("/auth/register", async (req, res) => {
     res.status(201).json({
       message: "Registration successful. Please verify the OTP sent to your phone.",
       user: signUpData.user,
-      requires_phone_verification: true
+      requires_phone_verification: true,
+      has_email: !!email
     });
   } catch (err) {
     console.error("Register error:", err);
     res.status(500).json({ error: "Internal server error" });
   }
 });
+
 
 
 // Login with phone, email, or username
