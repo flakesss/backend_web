@@ -1502,6 +1502,201 @@ app.patch("/notifications/read-all", requireAuth, async (req, res) => {
 });
 
 // ============================================================
+// ROUTES: Feedback (CSAT - Customer Satisfaction)
+// ============================================================
+
+// Submit feedback (can be authenticated or anonymous)
+app.post("/feedback", optionalAuth, async (req, res) => {
+  const { order_id, order_number, rating, comment, device_info } = req.body;
+
+  // Validate required fields
+  if (!rating || rating < 1 || rating > 5) {
+    return res.status(400).json({ error: "Rating must be between 1 and 5" });
+  }
+
+  try {
+    // Determine feedback type from device_info context
+    let feedbackType = 'buyer_payment_completed'; // default
+    if (device_info?.context === 'seller_order_created') {
+      feedbackType = 'seller_order_created';
+    } else if (device_info?.context === 'post_transaction') {
+      feedbackType = 'buyer_payment_completed';
+    }
+
+    // Get user full name from profile if authenticated
+    let userFullName = null;
+    if (req.user?.id) {
+      try {
+        const { data: profile } = await supabaseAdmin
+          .from("profiles")
+          .select("full_name")
+          .eq("id", req.user.id)
+          .single();
+
+        userFullName = profile?.full_name || null;
+      } catch (profileErr) {
+        console.error("Failed to fetch user profile:", profileErr);
+        // Continue without name if profile fetch fails
+      }
+    }
+
+    const feedbackData = {
+      order_id: order_id || null,
+      order_number: order_number || null,
+      user_id: req.user?.id || null, // Can be null for anonymous feedback
+      user_full_name: userFullName,
+      rating: parseInt(rating),
+      comment: comment || null,
+      feedback_type: feedbackType,
+      device_info: device_info || {},
+      created_at: new Date().toISOString()
+    };
+
+    const { data, error } = await supabaseAdmin
+      .from("feedback")
+      .insert(feedbackData)
+      .select()
+      .single();
+
+    if (error) {
+      console.error("Feedback submission error:", error);
+      throw error;
+    }
+
+    // If order_id provided, optionally create a notification for seller
+    if (order_id && feedbackType === 'buyer_payment_completed') {
+      try {
+        // Get order to find seller
+        const { data: order } = await supabaseAdmin
+          .from("orders")
+          .select("seller_id, order_number")
+          .eq("id", order_id)
+          .single();
+
+        if (order?.seller_id) {
+          await createNotification(
+            order.seller_id,
+            "feedback_received",
+            "Feedback Diterima ⭐",
+            `${userFullName || 'Pembeli'} memberikan rating ${rating} bintang untuk order ${order.order_number}`,
+            order_id,
+            order.order_number,
+            { rating, has_comment: !!comment, feedback_type: feedbackType }
+          );
+        }
+      } catch (notifErr) {
+        console.error("Failed to create feedback notification:", notifErr);
+        // Don't fail the feedback submission if notification fails
+      }
+    }
+
+    res.status(201).json({
+      message: "Terima kasih atas feedback Anda!",
+      feedback: data
+    });
+  } catch (err) {
+    console.error("Submit feedback error:", err);
+    res.status(500).json({ error: "Failed to submit feedback" });
+  }
+});
+
+
+// Get feedback (admin only or by order_id for seller)
+app.get("/feedback", requireAuth, async (req, res) => {
+  const { order_id, limit = 100 } = req.query;
+
+  try {
+    // Check if user is admin
+    const { data: profile } = await supabaseAdmin
+      .from("profiles")
+      .select("role")
+      .eq("id", req.user.id)
+      .single();
+
+    let query = supabaseAdmin
+      .from("feedback")
+      .select(`
+        *,
+        order:orders (
+          id,
+          order_number,
+          title,
+          seller_id
+        )
+      `)
+      .order("created_at", { ascending: false })
+      .limit(parseInt(limit));
+
+    // If not admin, only show feedback for their orders
+    if (profile?.role !== "admin") {
+      if (order_id) {
+        // Verify user owns this order
+        const { data: order } = await supabaseAdmin
+          .from("orders")
+          .select("seller_id")
+          .eq("id", order_id)
+          .single();
+
+        if (!order || order.seller_id !== req.user.id) {
+          return res.status(403).json({ error: "Access denied" });
+        }
+
+        query = query.eq("order_id", order_id);
+      } else {
+        // Get feedback for all user's orders
+        const { data: userOrders } = await supabaseAdmin
+          .from("orders")
+          .select("id")
+          .eq("seller_id", req.user.id);
+
+        const orderIds = (userOrders || []).map(o => o.id);
+        query = query.in("order_id", orderIds);
+      }
+    }
+
+    const { data, error } = await query;
+
+    if (error) throw error;
+
+    res.json(data || []);
+  } catch (err) {
+    console.error("Get feedback error:", err);
+    res.status(500).json({ error: "Failed to fetch feedback" });
+  }
+});
+
+// Get feedback summary/statistics (admin only)
+app.get("/feedback/stats", requireAuth, requireAdmin, async (req, res) => {
+  try {
+    const { data, error } = await supabaseAdmin
+      .from("feedback")
+      .select("rating, created_at");
+
+    if (error) throw error;
+
+    const stats = {
+      total: data.length,
+      average_rating: data.length > 0
+        ? (data.reduce((sum, f) => sum + f.rating, 0) / data.length).toFixed(2)
+        : 0,
+      rating_distribution: {
+        1: data.filter(f => f.rating === 1).length,
+        2: data.filter(f => f.rating === 2).length,
+        3: data.filter(f => f.rating === 3).length,
+        4: data.filter(f => f.rating === 4).length,
+        5: data.filter(f => f.rating === 5).length,
+      },
+      recent_feedback: data.slice(0, 10)
+    };
+
+    res.json(stats);
+  } catch (err) {
+    console.error("Get feedback stats error:", err);
+    res.status(500).json({ error: "Failed to fetch feedback statistics" });
+  }
+});
+
+// ============================================================
 // Health Check
 // ============================================================
 app.get("/", (req, res) => {
