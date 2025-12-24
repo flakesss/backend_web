@@ -584,6 +584,75 @@ app.get("/auth/me", requireAuth, async (req, res) => {
   }
 });
 
+// Update user profile
+app.patch("/auth/me", requireAuth, async (req, res) => {
+  const { full_name, phone } = req.body;
+
+  try {
+    // Update profile in database
+    const { data, error } = await supabaseAdmin
+      .from("profiles")
+      .update({
+        full_name: full_name || null,
+        phone: phone || null,
+        updated_at: new Date().toISOString()
+      })
+      .eq("id", req.user.id)
+      .select()
+      .single();
+
+    if (error) {
+      console.error("Update profile error:", error);
+      throw error;
+    }
+
+    // Also update user metadata in auth
+    try {
+      await supabaseAdmin.auth.admin.updateUserById(req.user.id, {
+        user_metadata: {
+          ...req.user.user_metadata,
+          full_name: full_name || req.user.user_metadata?.full_name,
+        }
+      });
+    } catch (metaError) {
+      console.error("Update user metadata error:", metaError);
+      // Continue even if metadata update fails
+    }
+
+    res.json(data);
+  } catch (err) {
+    console.error("Update profile error:", err);
+    res.status(500).json({ error: "Failed to update profile" });
+  }
+});
+
+// Change password
+app.post("/auth/change-password", requireAuth, async (req, res) => {
+  const { newPassword } = req.body;
+
+  if (!newPassword || newPassword.length < 6) {
+    return res.status(400).json({ error: "Password must be at least 6 characters" });
+  }
+
+  try {
+    // Update user password using admin client
+    const { error } = await supabaseAdmin.auth.admin.updateUserById(
+      req.user.id,
+      { password: newPassword }
+    );
+
+    if (error) {
+      console.error("Change password error:", error);
+      throw error;
+    }
+
+    res.json({ message: "Password updated successfully" });
+  } catch (err) {
+    console.error("Change password error:", err);
+    res.status(500).json({ error: "Failed to change password" });
+  }
+});
+
 // ============================================================
 // ROUTES: Bank Accounts (Seller's receiving bank)
 // ============================================================
