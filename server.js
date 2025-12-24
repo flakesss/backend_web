@@ -1395,6 +1395,52 @@ app.get("/admin/fund-releases", requireAuth, requireAdmin, async (req, res) => {
   }
 });
 
+// Get admin statistics
+app.get("/admin/stats", requireAuth, requireAdmin, async (req, res) => {
+  try {
+    // Get all orders
+    const { data: orders, error: ordersError } = await supabaseAdmin
+      .from("orders")
+      .select("id, status, total_amount, created_at");
+
+    if (ordersError) throw ordersError;
+
+    // Get all payment proofs
+    const { data: paymentProofs, error: proofsError } = await supabaseAdmin
+      .from("payment_proofs")
+      .select("id, status");
+
+    if (proofsError) throw proofsError;
+
+    // Get total users count
+    const { data: profiles, error: profilesError } = await supabaseAdmin
+      .from("profiles")
+      .select("id, created_at");
+
+    if (profilesError) throw profilesError;
+
+    // Calculate stats
+    const stats = {
+      totalUsers: profiles?.length || 0,
+      totalOrders: orders?.length || 0,
+      pendingPayments: paymentProofs?.filter(p => p.status === 'pending').length || 0,
+      verifiedPayments: orders?.filter(o => ['paid', 'shipped', 'delivered', 'completed'].includes(o.status)).length || 0,
+      totalRevenue: orders
+        ?.filter(o => o.status === 'completed')
+        .reduce((sum, o) => sum + (o.total_amount || 0), 0) || 0,
+      // Additional useful stats
+      awaitingPayment: orders?.filter(o => o.status === 'awaiting_payment').length || 0,
+      inVerification: orders?.filter(o => o.status === 'verification').length || 0,
+      activeOrders: orders?.filter(o => ['paid', 'shipped', 'delivered'].includes(o.status)).length || 0,
+    };
+
+    res.json(stats);
+  } catch (err) {
+    console.error("Admin stats error:", err);
+    res.status(500).json({ error: "Failed to fetch admin statistics" });
+  }
+});
+
 // ============================================================
 // ROUTES: Dashboard Stats
 // ============================================================
