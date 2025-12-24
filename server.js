@@ -20,19 +20,31 @@ const allowedOrigins = [
   'http://127.0.0.1:5173',
 ].filter(Boolean); // Remove undefined values
 
+console.log('Allowed CORS origins:', allowedOrigins);
+console.log('NODE_ENV:', process.env.NODE_ENV);
+
 const corsOptions = {
   origin: function (origin, callback) {
     // Allow requests with no origin (like mobile apps, curl, Postman)
     if (!origin) return callback(null, true);
 
+    // Check if origin is in allowed list
     if (allowedOrigins.includes(origin)) {
+      console.log('CORS allowed:', origin);
       callback(null, true);
     } else if (process.env.NODE_ENV !== 'production') {
       // In development, allow all origins
+      console.log('CORS allowed (dev mode):', origin);
       callback(null, true);
     } else {
-      console.log('CORS blocked origin:', origin);
-      callback(new Error('Not allowed by CORS'));
+      // In production, check if FRONTEND_URL is set, if not allow all (temporary)
+      if (!process.env.FRONTEND_URL) {
+        console.log('⚠️ FRONTEND_URL not set, allowing:', origin);
+        callback(null, true);
+      } else {
+        console.log('❌ CORS blocked origin:', origin);
+        callback(new Error('Not allowed by CORS'));
+      }
     }
   },
   credentials: true,
