@@ -579,12 +579,33 @@ app.patch("/auth/me", requireAuth, async (req, res) => {
   const { full_name, phone } = req.body;
 
   try {
+    // Normalize phone number to +62 format
+    let normalizedPhone = phone;
+    if (phone) {
+      // Remove spaces, dashes, parentheses
+      normalizedPhone = phone.replace(/[\s\-\(\)]/g, '');
+
+      // Convert 08xxx to +628xxx
+      if (normalizedPhone.startsWith('08')) {
+        normalizedPhone = '+62' + normalizedPhone.substring(1);
+      }
+      // Convert 8xxx to +628xxx  
+      else if (normalizedPhone.startsWith('8') && !normalizedPhone.startsWith('+')) {
+        normalizedPhone = '+62' + normalizedPhone;
+      }
+      // Already +62xxx, keep as is
+      else if (normalizedPhone.startsWith('+62')) {
+        normalizedPhone = normalizedPhone;
+      }
+      // Other formats - keep as user entered
+    }
+
     // Update profile in database
     const { data, error } = await supabaseAdmin
       .from("profiles")
       .update({
         full_name: full_name || null,
-        phone: phone || null,
+        phone: normalizedPhone || null,
         updated_at: new Date().toISOString()
       })
       .eq("id", req.user.id)
