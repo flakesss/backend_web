@@ -739,15 +739,10 @@ app.post("/profile/add-email", requireAuth, async (req, res) => {
       .update({ email: email })
       .eq("id", req.user.id);
 
-    // Extract OTP/code from the magic link if available
-    const actionLink = tokenData?.properties?.action_link || '';
-
     res.json({
       message: "Email updated. Please check your email for verification link.",
       email: email,
-      verification_sent: true,
-      // For development - remove in production
-      verification_link: process.env.NODE_ENV === 'development' ? actionLink : undefined
+      verification_sent: true
     });
   } catch (err) {
     console.error("Add email error:", err);
