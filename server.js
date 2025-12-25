@@ -656,14 +656,26 @@ app.get("/profile/email-status", requireAuth, async (req, res) => {
       .eq("id", req.user.id)
       .single();
 
-    // Check if email is real or dummy
+    // Get pending email from metadata
+    const pendingEmail = req.user.user_metadata?.pending_email;
+
+    // Check if current email is dummy
     const isDummyEmail = !profile?.email || profile.email.endsWith('@temp.flocify.local');
-    const hasVerifiedEmail = req.user.email_confirmed_at && !isDummyEmail;
+
+    // Determine actual email to show
+    const displayEmail = pendingEmail || (isDummyEmail ? null : profile?.email);
+
+    // Is verified? Email must be confirmed AND not pending
+    const isVerified = req.user.email_confirmed_at && req.user.email && !pendingEmail && !isDummyEmail;
+
+    // Has email? True if has pending OR verified email
+    const hasEmail = !!pendingEmail || !isDummyEmail;
 
     res.json({
-      has_email: !isDummyEmail,
-      email: isDummyEmail ? null : profile?.email,
-      is_verified: hasVerifiedEmail
+      has_email: hasEmail,
+      email: displayEmail,
+      is_verified: isVerified,
+      is_pending: !!pendingEmail
     });
   } catch (err) {
     console.error("Get email status error:", err);
@@ -690,12 +702,16 @@ app.post("/profile/add-email", requireAuth, async (req, res) => {
       return res.status(400).json({ error: "Email already in use by another account" });
     }
 
-    // Update user email - Supabase will automatically send confirm email change notification
+    // DON'T update user.email yet! Only store pending_email in metadata
+    // This prevents Supabase from treating it as a separate account
     const { data: updateData, error: updateError } = await supabaseAdmin.auth.admin.updateUserById(
       req.user.id,
       {
-        email: email,
-        email_confirm: false, // Unverified - awaiting confirmation
+        user_metadata: {
+          ...req.user.user_metadata,
+          pending_email: email
+          // Email will be moved to user.email after verification
+        }
       }
     );
 
@@ -704,22 +720,38 @@ app.post("/profile/add-email", requireAuth, async (req, res) => {
       return res.status(500).json({ error: "Failed to update email: " + updateError.message });
     }
 
-    // Store pending email in metadata for tracking
-    await supabaseAdmin.auth.admin.updateUserById(
-      req.user.id,
-      {
-        user_metadata: {
-          ...req.user.user_metadata,
-          pending_email: email,
-          email_change_sent_at: new Date().toISOString()
-        }
+    // Generate email verification token
+    const { data: tokenData, error: tokenError } = await supabaseAdmin.auth.admin.generateLink({
+      type: 'magiclink',
+      email: email,
+      options: {
+        redirectTo: `${process.env.FRONTEND_URL || 'http://localhost:5173'}/profile/edit`
       }
-    );
+    });
 
-    console.log("✅ Email change initiated. Supabase will send confirmation email to:", email);
+    if (tokenError) {
+      console.error("Generate link error:", tokenError);
+      // Fallback: Just update db and tell user to login again
+      await supabaseAdmin
+        .from("profiles")
+        .update({ email: email })
+        .eq("id", req.user.id);
+
+      return res.json({
+        message: "Email added. Please login again to verify.",
+        email: email,
+        verification_sent: false
+      });
+    }
+
+    // Update profile table
+    await supabaseAdmin
+      .from("profiles")
+      .update({ email: email })
+      .eq("id", req.user.id);
 
     res.json({
-      message: "Verification email sent by Supabase. Please check your inbox and confirm.",
+      message: "Email updated. Please check your email for verification link.",
       email: email,
       verification_sent: true
     });
@@ -729,86 +761,40 @@ app.post("/profile/add-email", requireAuth, async (req, res) => {
   }
 });
 
-// Email verification callback - called when user clicks magic link
-// Supabase automatically verifies the email, we just need to update our tables
-app.post("/profile/confirm-email", requireAuth, async (req, res) => {
-  try {
-    // Get user's current auth data
-    const { data: authUser, error: authError } = await supabaseAdmin.auth.admin.getUserById(req.user.id);
-
-    if (authError || !authUser) {
-      return res.status(404).json({ error: "User not found" });
-    }
-
-    // Check if email is confirmed in Supabase auth
-    if (!authUser.user.email_confirmed_at) {
-      return res.status(400).json({ error: "Email not yet verified" });
-    }
-
-    const verifiedEmail = authUser.user.email;
-
-    // Update user metadata
-    await supabaseAdmin.auth.admin.updateUserById(
-      req.user.id,
-      {
-        user_metadata: {
-          ...authUser.user.user_metadata,
-          has_email: true,
-          pending_email: null
-        }
-      }
-    );
-
-    // Update profiles table
-    await supabaseAdmin
-      .from("profiles")
-      .update({
-        email: verifiedEmail,
-        updated_at: new Date().toISOString()
-      })
-      .eq("id", req.user.id);
-
-    res.json({
-      message: "Email verified successfully!",
-      email: verifiedEmail,
-      verified: true
-    });
-  } catch (err) {
-    console.error("Confirm email error:", err);
-    res.status(500).json({ error: "Failed to confirm email" });
-  }
-});
-
-// Verify email with OTP code
+// Verify email with OTP code OR confirmation
 app.post("/profile/verify-email", requireAuth, async (req, res) => {
-  const { email, code } = req.body;
+  const { code } = req.body;
 
-  if (!email || !code) {
-    return res.status(400).json({ error: "Email and verification code are required" });
+  // Get pending email from user metadata
+  const pendingEmail = req.user.user_metadata?.pending_email;
+
+  if (!pendingEmail) {
+    return res.status(400).json({ error: "No pending email to verify" });
   }
 
   try {
-    // Verify OTP
-    const { data, error } = await supabase.auth.verifyOtp({
-      email: email,
-      token: code,
-      type: 'email'
-    });
+    // If code provided, verify OTP
+    if (code) {
+      const { data, error } = await supabase.auth.verifyOtp({
+        email: pendingEmail,
+        token: code,
+        type: 'email'
+      });
 
-    if (error) {
-      return res.status(400).json({ error: "Invalid or expired verification code" });
+      if (error) {
+        return res.status(400).json({ error: "Invalid or expired verification code" });
+      }
     }
 
-    // Update user email and confirm it
+    // Move pending_email to actual email field (NOW it's verified)
     await supabaseAdmin.auth.admin.updateUserById(
       req.user.id,
       {
-        email: email,
+        email: pendingEmail,
         email_confirm: true,
         user_metadata: {
           ...req.user.user_metadata,
-          has_email: true,
-          pending_email: null
+          pending_email: null  // Clear pending
         }
       }
     );
@@ -817,14 +803,14 @@ app.post("/profile/verify-email", requireAuth, async (req, res) => {
     await supabaseAdmin
       .from("profiles")
       .update({
-        email: email,
+        email: pendingEmail,
         updated_at: new Date().toISOString()
       })
       .eq("id", req.user.id);
 
     res.json({
       message: "Email verified successfully!",
-      email: email
+      email: pendingEmail
     });
   } catch (err) {
     console.error("Verify email error:", err);
@@ -834,16 +820,17 @@ app.post("/profile/verify-email", requireAuth, async (req, res) => {
 
 // Resend email verification
 app.post("/profile/resend-email-verification", requireAuth, async (req, res) => {
-  const { email } = req.body;
+  // Get pending email from metadata
+  const pendingEmail = req.user.user_metadata?.pending_email;
 
-  if (!email) {
-    return res.status(400).json({ error: "Email is required" });
+  if (!pendingEmail) {
+    return res.status(400).json({ error: "No pending email to verify" });
   }
 
   try {
-    // Send OTP to email
+    // Send OTP to pending email
     const { error } = await supabase.auth.signInWithOtp({
-      email: email,
+      email: pendingEmail,
       options: {
         shouldCreateUser: false,
       }
