@@ -203,16 +203,11 @@ const requireAdmin = async (req, res, next) => {
 
 // Register new user with phone, username (email optional)
 app.post("/auth/register", async (req, res) => {
-  const { phone, email, username, password, full_name, captchaToken } = req.body;
+  const { phone, email, username, password, full_name } = req.body;
 
   // Validate required fields (email is now OPTIONAL)
   if (!phone || !username || !password) {
     return res.status(400).json({ error: "Phone, username, and password are required" });
-  }
-
-  // Captcha token wajib untuk mencegah spam
-  if (!captchaToken) {
-    return res.status(400).json({ error: "Captcha verification required" });
   }
 
   try {
@@ -362,15 +357,10 @@ app.post("/auth/register", async (req, res) => {
 
 // Login with phone, email, or username
 app.post("/auth/login", async (req, res) => {
-  const { identifier, password, captchaToken } = req.body;
+  const { identifier, password } = req.body;
 
   if (!identifier || !password) {
     return res.status(400).json({ error: "Identifier and password are required" });
-  }
-
-  // Captcha token wajib untuk keamanan
-  if (!captchaToken) {
-    return res.status(400).json({ error: "Captcha verification required" });
   }
 
   try {
@@ -382,10 +372,7 @@ app.post("/auth/login", async (req, res) => {
       console.log("Login attempt with email:", identifier);
       const result = await supabase.auth.signInWithPassword({
         email: identifier,
-        password,
-        options: {
-          captchaToken: captchaToken,
-        },
+        password
       });
       loginData = result.data;
       loginError = result.error;
@@ -394,10 +381,7 @@ app.post("/auth/login", async (req, res) => {
       console.log("Login attempt with phone:", identifier);
       const result = await supabase.auth.signInWithPassword({
         phone: identifier,
-        password,
-        options: {
-          captchaToken: captchaToken,
-        },
+        password
       });
       loginData = result.data;
       loginError = result.error;
@@ -420,20 +404,14 @@ app.post("/auth/login", async (req, res) => {
       if (profile.phone) {
         const result = await supabase.auth.signInWithPassword({
           phone: profile.phone,
-          password,
-          options: {
-            captchaToken: captchaToken,
-          },
+          password
         });
         loginData = result.data;
         loginError = result.error;
       } else if (profile.email) {
         const result = await supabase.auth.signInWithPassword({
           email: profile.email,
-          password,
-          options: {
-            captchaToken: captchaToken,
-          },
+          password
         });
         loginData = result.data;
         loginError = result.error;
