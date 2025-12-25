@@ -644,6 +644,168 @@ app.post("/auth/change-password", requireAuth, async (req, res) => {
 });
 
 // ============================================================
+// ROUTES: Email Management (Add email to phone-only accounts)
+// ============================================================
+
+// Check email status for current user
+app.get("/profile/email-status", requireAuth, async (req, res) => {
+  try {
+    const { data: profile } = await supabaseAdmin
+      .from("profiles")
+      .select("email")
+      .eq("id", req.user.id)
+      .single();
+
+    // Check if email is real or dummy
+    const isDummyEmail = !profile?.email || profile.email.endsWith('@temp.flocify.local');
+    const hasVerifiedEmail = req.user.email_confirmed_at && !isDummyEmail;
+
+    res.json({
+      has_email: !isDummyEmail,
+      email: isDummyEmail ? null : profile?.email,
+      is_verified: hasVerifiedEmail
+    });
+  } catch (err) {
+    console.error("Get email status error:", err);
+    res.status(500).json({ error: "Failed to get email status" });
+  }
+});
+
+// Add email to user profile (Step 1: initiate)
+app.post("/profile/add-email", requireAuth, async (req, res) => {
+  const { email } = req.body;
+
+  if (!email || !email.includes('@')) {
+    return res.status(400).json({ error: "Valid email is required" });
+  }
+
+  try {
+    // Check if email already exists in system
+    const { data: existingUsers } = await supabaseAdmin.auth.admin.listUsers();
+    const emailExists = existingUsers.users.some(u =>
+      u.email === email && u.id !== req.user.id
+    );
+
+    if (emailExists) {
+      return res.status(400).json({ error: "Email already in use by another account" });
+    }
+
+    // Send OTP to email for verification
+    const { error: otpError } = await supabase.auth.signInWithOtp({
+      email: email,
+      options: {
+        shouldCreateUser: false,
+      }
+    });
+
+    if (otpError) {
+      console.error("Send OTP error:", otpError);
+      return res.status(500).json({ error: "Failed to send verification code" });
+    }
+
+    // Temporarily store email in user metadata (will be moved to email field after verification)
+    await supabaseAdmin.auth.admin.updateUserById(
+      req.user.id,
+      {
+        user_metadata: {
+          ...req.user.user_metadata,
+          pending_email: email
+        }
+      }
+    );
+
+    res.json({
+      message: "Verification code sent to your email. Please check your inbox.",
+      email: email
+    });
+  } catch (err) {
+    console.error("Add email error:", err);
+    res.status(500).json({ error: "Failed to add email" });
+  }
+});
+
+// Verify email with OTP code
+app.post("/profile/verify-email", requireAuth, async (req, res) => {
+  const { email, code } = req.body;
+
+  if (!email || !code) {
+    return res.status(400).json({ error: "Email and verification code are required" });
+  }
+
+  try {
+    // Verify OTP
+    const { data, error } = await supabase.auth.verifyOtp({
+      email: email,
+      token: code,
+      type: 'email'
+    });
+
+    if (error) {
+      return res.status(400).json({ error: "Invalid or expired verification code" });
+    }
+
+    // Update user email and confirm it
+    await supabaseAdmin.auth.admin.updateUserById(
+      req.user.id,
+      {
+        email: email,
+        email_confirm: true,
+        user_metadata: {
+          ...req.user.user_metadata,
+          has_email: true,
+          pending_email: null
+        }
+      }
+    );
+
+    // Update profile table
+    await supabaseAdmin
+      .from("profiles")
+      .update({
+        email: email,
+        updated_at: new Date().toISOString()
+      })
+      .eq("id", req.user.id);
+
+    res.json({
+      message: "Email verified successfully!",
+      email: email
+    });
+  } catch (err) {
+    console.error("Verify email error:", err);
+    res.status(500).json({ error: "Failed to verify email" });
+  }
+});
+
+// Resend email verification
+app.post("/profile/resend-email-verification", requireAuth, async (req, res) => {
+  const { email } = req.body;
+
+  if (!email) {
+    return res.status(400).json({ error: "Email is required" });
+  }
+
+  try {
+    // Send OTP to email
+    const { error } = await supabase.auth.signInWithOtp({
+      email: email,
+      options: {
+        shouldCreateUser: false,
+      }
+    });
+
+    if (error) {
+      throw error;
+    }
+
+    res.json({ message: "Verification code resent to your email" });
+  } catch (err) {
+    console.error("Resend verification error:", err);
+    res.status(500).json({ error: "Failed to resend verification" });
+  }
+});
+
+// ============================================================
 // ROUTES: Bank Accounts (Seller's receiving bank)
 // ============================================================
 
