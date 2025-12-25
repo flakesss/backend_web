@@ -690,23 +690,22 @@ app.post("/profile/add-email", requireAuth, async (req, res) => {
       return res.status(400).json({ error: "Email already in use by another account" });
     }
 
-    // Update user email (unverified)
+    // Store pending email in metadata (DON'T update main email field yet)
     const { data: updateData, error: updateError } = await supabaseAdmin.auth.admin.updateUserById(
       req.user.id,
       {
-        email: email,
-        email_confirm: false, // Mark as unverified
         user_metadata: {
           ...req.user.user_metadata,
           pending_email: email,
-          has_email: true
+          email_verification_sent_at: new Date().toISOString()
+          // DON'T set has_email: true until verified!
         }
       }
     );
 
     if (updateError) {
-      console.error("Update user email error:", updateError);
-      return res.status(500).json({ error: "Failed to update email: " + updateError.message });
+      console.error("Update user metadata error:", updateError);
+      return res.status(500).json({ error: "Failed to save email: " + updateError.message });
     }
 
     // Generate email verification token
@@ -720,24 +719,14 @@ app.post("/profile/add-email", requireAuth, async (req, res) => {
 
     if (tokenError) {
       console.error("Generate link error:", tokenError);
-      // Fallback: Just update db and tell user to login again
-      await supabaseAdmin
-        .from("profiles")
-        .update({ email: email })
-        .eq("id", req.user.id);
-
-      return res.json({
-        message: "Email added. Please login again to verify.",
-        email: email,
-        verification_sent: false
+      return res.status(500).json({
+        error: "Failed to send verification email. Please try again.",
+        details: tokenError.message
       });
     }
 
-    // Update profile table
-    await supabaseAdmin
-      .from("profiles")
-      .update({ email: email })
-      .eq("id", req.user.id);
+    console.log("✅ Magic link generated and sent to:", email);
+    // DON'T update profiles table until email is verified
 
     res.json({
       message: "Email updated. Please check your email for verification link.",
@@ -747,6 +736,56 @@ app.post("/profile/add-email", requireAuth, async (req, res) => {
   } catch (err) {
     console.error("Add email error:", err);
     res.status(500).json({ error: "Failed to add email: " + err.message });
+  }
+});
+
+// Email verification callback - called when user clicks magic link
+// Supabase automatically verifies the email, we just need to update our tables
+app.post("/profile/confirm-email", requireAuth, async (req, res) => {
+  try {
+    // Get user's current auth data
+    const { data: authUser, error: authError } = await supabaseAdmin.auth.admin.getUserById(req.user.id);
+
+    if (authError || !authUser) {
+      return res.status(404).json({ error: "User not found" });
+    }
+
+    // Check if email is confirmed in Supabase auth
+    if (!authUser.user.email_confirmed_at) {
+      return res.status(400).json({ error: "Email not yet verified" });
+    }
+
+    const verifiedEmail = authUser.user.email;
+
+    // Update user metadata
+    await supabaseAdmin.auth.admin.updateUserById(
+      req.user.id,
+      {
+        user_metadata: {
+          ...authUser.user.user_metadata,
+          has_email: true,
+          pending_email: null
+        }
+      }
+    );
+
+    // Update profiles table
+    await supabaseAdmin
+      .from("profiles")
+      .update({
+        email: verifiedEmail,
+        updated_at: new Date().toISOString()
+      })
+      .eq("id", req.user.id);
+
+    res.json({
+      message: "Email verified successfully!",
+      email: verifiedEmail,
+      verified: true
+    });
+  } catch (err) {
+    console.error("Confirm email error:", err);
+    res.status(500).json({ error: "Failed to confirm email" });
   }
 });
 
