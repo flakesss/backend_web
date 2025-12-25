@@ -716,35 +716,39 @@ app.post("/profile/add-email", requireAuth, async (req, res) => {
     );
 
     if (updateError) {
-      console.error("Update user email error:", updateError);
+      console.error("Update user metadata error:", updateError);
       return res.status(500).json({ error: "Failed to update email: " + updateError.message });
     }
 
-    // Generate email verification token
-    const { data: tokenData, error: tokenError } = await supabaseAdmin.auth.admin.generateLink({
-      type: 'magiclink',
+    // Send OTP verification email (Supabase auto-sends this!)
+    const { error: otpError } = await supabaseAdmin.auth.admin.generateLink({
+      type: 'signup',
       email: email,
       options: {
-        redirectTo: `${process.env.FRONTEND_URL || 'http://localhost:5173'}/profile/edit`
+        data: {
+          user_id: req.user.id,
+          is_email_update: true
+        },
+        redirectTo: `${process.env.FRONTEND_URL || 'http://localhost:5173'}/profile/edit?verified=true`
       }
     });
 
-    if (tokenError) {
-      console.error("Generate link error:", tokenError);
-      // Fallback: Just update db and tell user to login again
+    if (otpError) {
+      console.error("Send verification email error:", otpError);
+      // Still save in profiles table for reference
       await supabaseAdmin
         .from("profiles")
         .update({ email: email })
         .eq("id", req.user.id);
 
       return res.json({
-        message: "Email added. Please login again to verify.",
+        message: "Email saved but verification email failed. Please contact support.",
         email: email,
         verification_sent: false
       });
     }
 
-    // Update profile table
+    // Update profiles table
     await supabaseAdmin
       .from("profiles")
       .update({ email: email })
