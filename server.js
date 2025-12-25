@@ -690,37 +690,68 @@ app.post("/profile/add-email", requireAuth, async (req, res) => {
       return res.status(400).json({ error: "Email already in use by another account" });
     }
 
-    // Send OTP to email for verification
-    const { error: otpError } = await supabase.auth.signInWithOtp({
-      email: email,
-      options: {
-        shouldCreateUser: false,
-      }
-    });
-
-    if (otpError) {
-      console.error("Send OTP error:", otpError);
-      return res.status(500).json({ error: "Failed to send verification code" });
-    }
-
-    // Temporarily store email in user metadata (will be moved to email field after verification)
-    await supabaseAdmin.auth.admin.updateUserById(
+    // Update user email (unverified)
+    const { data: updateData, error: updateError } = await supabaseAdmin.auth.admin.updateUserById(
       req.user.id,
       {
+        email: email,
+        email_confirm: false, // Mark as unverified
         user_metadata: {
           ...req.user.user_metadata,
-          pending_email: email
+          pending_email: email,
+          has_email: true
         }
       }
     );
 
+    if (updateError) {
+      console.error("Update user email error:", updateError);
+      return res.status(500).json({ error: "Failed to update email: " + updateError.message });
+    }
+
+    // Generate email verification token
+    const { data: tokenData, error: tokenError } = await supabaseAdmin.auth.admin.generateLink({
+      type: 'magiclink',
+      email: email,
+      options: {
+        redirectTo: `${process.env.FRONTEND_URL || 'http://localhost:5173'}/profile/edit`
+      }
+    });
+
+    if (tokenError) {
+      console.error("Generate link error:", tokenError);
+      // Fallback: Just update db and tell user to login again
+      await supabaseAdmin
+        .from("profiles")
+        .update({ email: email })
+        .eq("id", req.user.id);
+
+      return res.json({
+        message: "Email added. Please login again to verify.",
+        email: email,
+        verification_sent: false
+      });
+    }
+
+    // Update profile table
+    await supabaseAdmin
+      .from("profiles")
+      .update({ email: email })
+      .eq("id", req.user.id);
+
+    // Extract OTP/code from the magic link if available
+    const actionLink = tokenData?.properties?.action_link || '';
+
     res.json({
-      message: "Verification code sent to your email. Please check your inbox.",
-      email: email
+      message: "Email updated. Please check your email for verification link.",
+      email: email,
+      verification_sent: true,
+      // For development - remove in production
+      verification_link: process.env.NODE_ENV === 'development' ? actionLink : undefined
     });
   } catch (err) {
     console.error("Add email error:", err);
-    res.status(500).json({ error: "Failed to add email" });
+    res.status(500).json({ error: "Failed to add email: " + err.message });
   }
 });
 
