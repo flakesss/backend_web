@@ -690,46 +690,36 @@ app.post("/profile/add-email", requireAuth, async (req, res) => {
       return res.status(400).json({ error: "Email already in use by another account" });
     }
 
-    // Store pending email in metadata (DON'T update main email field yet)
+    // Update user email - Supabase will automatically send confirm email change notification
     const { data: updateData, error: updateError } = await supabaseAdmin.auth.admin.updateUserById(
+      req.user.id,
+      {
+        email: email,
+        email_confirm: false, // Unverified - awaiting confirmation
+      }
+    );
+
+    if (updateError) {
+      console.error("Update user email error:", updateError);
+      return res.status(500).json({ error: "Failed to update email: " + updateError.message });
+    }
+
+    // Store pending email in metadata for tracking
+    await supabaseAdmin.auth.admin.updateUserById(
       req.user.id,
       {
         user_metadata: {
           ...req.user.user_metadata,
           pending_email: email,
-          email_verification_sent_at: new Date().toISOString()
-          // DON'T set has_email: true until verified!
+          email_change_sent_at: new Date().toISOString()
         }
       }
     );
 
-    if (updateError) {
-      console.error("Update user metadata error:", updateError);
-      return res.status(500).json({ error: "Failed to save email: " + updateError.message });
-    }
-
-    // Generate email verification token
-    const { data: tokenData, error: tokenError } = await supabaseAdmin.auth.admin.generateLink({
-      type: 'magiclink',
-      email: email,
-      options: {
-        redirectTo: `${process.env.FRONTEND_URL || 'http://localhost:5173'}/profile/edit`
-      }
-    });
-
-    if (tokenError) {
-      console.error("Generate link error:", tokenError);
-      return res.status(500).json({
-        error: "Failed to send verification email. Please try again.",
-        details: tokenError.message
-      });
-    }
-
-    console.log("✅ Magic link generated and sent to:", email);
-    // DON'T update profiles table until email is verified
+    console.log("✅ Email change initiated. Supabase will send confirmation email to:", email);
 
     res.json({
-      message: "Email updated. Please check your email for verification link.",
+      message: "Verification email sent by Supabase. Please check your inbox and confirm.",
       email: email,
       verification_sent: true
     });
