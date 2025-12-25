@@ -616,6 +616,46 @@ app.patch("/auth/me", requireAuth, async (req, res) => {
   }
 });
 
+// Forgot Password - Send reset link to email
+app.post("/auth/forgot-password", async (req, res) => {
+  const { email } = req.body;
+
+  if (!email) {
+    return res.status(400).json({ error: "Email is required" });
+  }
+
+  try {
+    // Check if user with this email exists
+    const { data: users } = await supabaseAdmin.auth.admin.listUsers();
+    const userExists = users.users.some(u => u.email === email);
+
+    if (!userExists) {
+      // Return success even if email doesn't exist (security best practice)
+      return res.json({
+        message: "If an account with that email exists, a password reset link has been sent."
+      });
+    }
+
+    // Send password reset email via Supabase
+    const { error } = await supabase.auth.resetPasswordForEmail(email, {
+      redirectTo: `${process.env.FRONTEND_URL || 'http://localhost:5173'}/reset-password`
+    });
+
+    if (error) {
+      console.error("Reset password error:", error);
+      throw error;
+    }
+
+    res.json({
+      message: "If an account with that email exists, a password reset link has been sent.",
+      success: true
+    });
+  } catch (err) {
+    console.error("Forgot password error:", err);
+    res.status(500).json({ error: "Failed to process password reset request" });
+  }
+});
+
 // Change password
 app.post("/auth/change-password", requireAuth, async (req, res) => {
   const { newPassword } = req.body;
