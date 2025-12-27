@@ -310,7 +310,7 @@ app.post("/auth/register", async (req, res) => {
         email: email || null, // Store actual email (or null)
         username: username,
         full_name: full_name || "",
-        has_email: !!email, // Flag to track if user provided email
+        has_email: !!email // Flag to track if user provided email
       }
     });
 
@@ -2069,4 +2069,166 @@ app.listen(port, () => {
   console.log(`   GET  /admin/orders - Admin: Get all orders`);
   console.log(`   GET  /admin/payment-proofs - Admin: Get pending proofs`);
   console.log(`   PATCH /admin/payment-proofs/:id - Admin: Approve/Reject`);
+});
+
+// ============================================================
+// ROUTES: QRIS Dynamic Generation
+// ============================================================
+
+// Admin: Upload/Save QRIS Settings
+app.post("/admin/qris/upload", requireAuth, async (req, res) => {
+  const { qris_data, merchant_name, merchant_city } = req.body;
+
+  if (!qris_data) {
+    return res.status(400).json({ error: "QRIS data is required" });
+  }
+
+  try {
+    const { validateQRISFormat, extractMerchantInfo } = require('./utils/qris');
+
+    // Validate QRIS format
+    if (!validateQRISFormat(qris_data)) {
+      return res.status(400).json({ error: "Invalid QRIS format" });
+    }
+
+    // Extract merchant info if not provided
+    let merchantInfo = { merchantName: merchant_name, merchantCity: merchant_city };
+    if (!merchant_name || !merchant_city) {
+      const extracted = extractMerchantInfo(qris_data);
+      merchantInfo.merchantName = merchant_name || extracted.merchantName || 'Flocify';
+      merchantInfo.merchantCity = merchant_city || extracted.merchantCity || 'Jakarta';
+    }
+
+    // Deactivate all existing QRIS
+    await supabaseAdmin
+      .from('qris_settings')
+      .update({ is_active: false })
+      .eq('is_active', true);
+
+    // Insert new QRIS
+    const { data, error } = await supabaseAdmin
+      .from('qris_settings')
+      .insert({
+        qris_data: qris_data,
+        merchant_name: merchantInfo.merchantName,
+        merchant_city: merchantInfo.merchantCity,
+        created_by: req.user.id,
+        is_active: true
+      })
+      .select()
+      .single();
+
+    if (error) {
+      console.error('Insert QRIS error:', error);
+      throw error;
+    }
+
+    res.json({
+      message: 'QRIS uploaded successfully',
+      qris: data
+    });
+  } catch (err) {
+    console.error('Upload QRIS error:', err);
+    res.status(500).json({ error: 'Failed to upload QRIS' });
+  }
+});
+
+// Admin: Get Current Active QRIS
+app.get("/admin/qris/current", requireAuth, async (req, res) => {
+  try {
+    const { data, error } = await supabaseAdmin
+      .from('qris_settings')
+      .select('*')
+      .eq('is_active', true)
+      .single();
+
+    if (error && error.code !== 'PGRST116') { // PGRST116 = no rows returned
+      throw error;
+    }
+
+    res.json({
+      qris: data || null
+    });
+  } catch (err) {
+    console.error('Get QRIS error:', err);
+    res.status(500).json({ error: 'Failed to get QRIS settings' });
+  }
+});
+
+// User: Generate Dynamic QRIS
+app.post("/qris/generate", requireAuth, async (req, res) => {
+  const { amount, order_id } = req.body;
+
+  if (!amount || amount <= 0) {
+    return res.status(400).json({ error: "Valid amount required" });
+  }
+
+  try {
+    // Get active QRIS
+    const { data: qrisSettings, error: qrisError } = await supabaseAdmin
+      .from('qris_settings')
+      .select('*')
+      .eq('is_active', true)
+      .single();
+
+    if (qrisError || !qrisSettings) {
+      return res.status(404).json({ error: 'No active QRIS found. Please contact admin.' });
+    }
+
+    // Generate dynamic QRIS
+    const { generateDynamicQRIS } = require('./utils/qris');
+    const dynamicQRIS = generateDynamicQRIS(qrisSettings.qris_data, parseInt(amount));
+
+    // Log transaction
+    const { data: transaction, error: transError } = await supabaseAdmin
+      .from('qris_transactions')
+      .insert({
+        user_id: req.user.id,
+        order_id: order_id || null,
+        amount: parseInt(amount),
+        generated_qris: dynamicQRIS,
+        status: 'pending',
+        expires_at: new Date(Date.now() + 30 * 60 * 1000).toISOString() // 30 minutes
+      })
+      .select()
+      .single();
+
+    if (transError) {
+      console.error('Log QRIS transaction error:', transError);
+      // Continue even if logging fails
+    }
+
+    res.json({
+      qris_string: dynamicQRIS,
+      amount: parseInt(amount),
+      merchant_name: qrisSettings.merchant_name,
+      merchant_city: qrisSettings.merchant_city,
+      transaction_id: transaction?.id,
+      expires_at: transaction?.expires_at
+    });
+  } catch (err) {
+    console.error('Generate QRIS error:', err);
+    res.status(500).json({ error: err.message || 'Failed to generate QRIS' });
+  }
+});
+
+// User: Get QRIS Transaction Status
+app.get("/qris/transaction/:id", requireAuth, async (req, res) => {
+  const { id } = req.params;
+
+  try {
+    const { data, error } = await supabaseAdmin
+      .from('qris_transactions')
+      .select('*')
+      .eq('id', id)
+      .eq('user_id', req.user.id)
+      .single();
+
+    if (error) throw error;
+
+    res.json({ transaction: data });
+  } catch (err) {
+    console.error('Get QRIS transaction error:', err);
+    res.status(404).json({ error: 'Transaction not found' });
+  }
 });
