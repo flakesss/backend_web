@@ -2232,3 +2232,28 @@ app.get("/qris/transaction/:id", requireAuth, async (req, res) => {
     res.status(404).json({ error: 'Transaction not found' });
   }
 });
+
+// Admin: Delete QRIS Settings
+app.delete("/admin/qris/:id", requireAuth, async (req, res) => {
+  const { id } = req.params;
+
+  try {
+    // Delete QRIS setting
+    const { error } = await supabaseAdmin
+      .from('qris_settings')
+      .delete()
+      .eq('id', id);
+
+    if (error) {
+      console.error('Delete QRIS error:', error);
+      throw error;
+    }
+
+    res.json({
+      message: 'QRIS deleted successfully'
+    });
+  } catch (err) {
+    console.error('Delete QRIS error:', err);
+    res.status(500).json({ error: 'Failed to delete QRIS' });
+  }
+});
