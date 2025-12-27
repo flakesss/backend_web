@@ -201,6 +201,7 @@ const requireAdmin = async (req, res, next) => {
 // ROUTES: Authentication
 // ============================================================
 
+
 // Register new user with phone, username (email optional)
 app.post("/auth/register", async (req, res) => {
   const { phone, email, username, password, full_name } = req.body;
@@ -208,6 +209,18 @@ app.post("/auth/register", async (req, res) => {
   // Validate required fields (email is now OPTIONAL)
   if (!phone || !username || !password) {
     return res.status(400).json({ error: "Phone, username, and password are required" });
+  }
+
+  // Validate password strength
+  const { validatePasswordStrength, getPasswordErrorMessage } = require('./utils/passwordValidator');
+  const passwordValidation = validatePasswordStrength(password);
+
+  if (!passwordValidation.isValid) {
+    const errorMessage = getPasswordErrorMessage(passwordValidation.requirements);
+    return res.status(400).json({
+      error: errorMessage,
+      requirements: passwordValidation.requirements
+    });
   }
 
   try {
@@ -681,8 +694,20 @@ app.post("/auth/forgot-password", async (req, res) => {
 app.post("/auth/change-password", requireAuth, async (req, res) => {
   const { newPassword } = req.body;
 
-  if (!newPassword || newPassword.length < 6) {
-    return res.status(400).json({ error: "Password must be at least 6 characters" });
+  if (!newPassword) {
+    return res.status(400).json({ error: "New password is required" });
+  }
+
+  // Validate password strength
+  const { validatePasswordStrength, getPasswordErrorMessage } = require('./utils/passwordValidator');
+  const passwordValidation = validatePasswordStrength(newPassword);
+
+  if (!passwordValidation.isValid) {
+    const errorMessage = getPasswordErrorMessage(passwordValidation.requirements);
+    return res.status(400).json({
+      error: errorMessage,
+      requirements: passwordValidation.requirements
+    });
   }
 
   try {
