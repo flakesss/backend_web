@@ -120,6 +120,16 @@ async function createNotification(userId, type, title, message, orderId = null, 
 }
 
 // ============================================================
+// AUTO-CANCEL SCHEDULER
+// ============================================================
+const { startAutoCancelScheduler } = require('./jobs/autoCancelOrders');
+
+// Start the auto-cancel scheduler when server starts
+if (process.env.NODE_ENV !== 'test') {
+  startAutoCancelScheduler();
+}
+
+// ============================================================
 // MIDDLEWARE: Authentication
 // ============================================================
 const requireAuth = async (req, res, next) => {
