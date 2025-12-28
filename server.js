@@ -507,6 +507,39 @@ app.post("/auth/verify-otp", async (req, res) => {
   }
 });
 
+// ============================================================
+// GOOGLE OAUTH CALLBACK
+// ============================================================
+const { handleOAuthUser } = require('./utils/oauthHandler');
+
+app.post("/auth/oauth/callback", async (req, res) => {
+  const { user } = req.body;
+
+  if (!user || !user.email) {
+    return res.status(400).json({ error: "Invalid OAuth user data" });
+  }
+
+  try {
+    const result = await handleOAuthUser(user);
+
+    if (!result.success) {
+      return res.status(500).json({ error: result.error || "OAuth login failed" });
+    }
+
+    res.json({
+      success: true,
+      merged: result.merged,
+      message: result.merged
+        ? "Account linked successfully"
+        : "OAuth login successful",
+      userId: result.profileId
+    });
+  } catch (err) {
+    console.error("OAuth callback error:", err);
+    res.status(500).json({ error: "Internal server error" });
+  }
+});
+
 // Resend OTP
 app.post("/auth/resend-otp", async (req, res) => {
   const { phone } = req.body;
