@@ -130,6 +130,11 @@ if (process.env.NODE_ENV !== 'test') {
 }
 
 // ============================================================
+// ADMIN MIDDLEWARE
+// ============================================================
+const { requireAdmin } = require('./middleware/requireAdmin');
+
+// ============================================================
 // MIDDLEWARE: Authentication
 // ============================================================
 const requireAuth = async (req, res, next) => {
@@ -164,6 +169,31 @@ const requireAuth = async (req, res, next) => {
     return res.status(401).json({ error: "Unauthorized" });
   }
 };
+
+// ============================================================
+// ADMIN CHECK ENDPOINT
+// ============================================================
+app.get("/admin/check", requireAuth, async (req, res) => {
+  try {
+    const { data: profile, error } = await supabaseAdmin
+      .from('profiles')
+      .select('role')
+      .eq('id', req.user.id)
+      .single();
+
+    if (error || !profile) {
+      return res.json({ isAdmin: false });
+    }
+
+    res.json({
+      isAdmin: profile.role === 'admin',
+      role: profile.role
+    });
+  } catch (err) {
+    console.error('Admin check error:', err);
+    res.json({ isAdmin: false });
+  }
+});
 
 // Optional auth - attach user if token exists, but don't block
 const optionalAuth = async (req, res, next) => {
