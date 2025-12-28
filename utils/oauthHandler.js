@@ -1,5 +1,5 @@
 // Google OAuth Handler with Account Linking
-// Merges Google accounts with existing email/password accounts
+// Properly handles OAuth logins and profile syncing
 
 const { createClient } = require('@supabase/supabase-js');
 
@@ -9,7 +9,7 @@ const supabase = createClient(supabaseUrl, supabaseServiceKey);
 
 /**
  * Handle OAuth user sign in
- * Links to existing account if email already exists
+ * Creates or updates profile based on OAuth data
  */
 async function handleOAuthUser(oauthUser) {
     try {
@@ -18,84 +18,80 @@ async function handleOAuthUser(oauthUser) {
         const provider = oauthUser.app_metadata?.provider || 'google';
 
         console.log(`[OAuth] Processing ${provider} login for: ${email}`);
+        console.log(`[OAuth] User ID: ${userId}`);
 
-        // Check if user profile exists with this email (from email/password signup)
+        // Check if profile already exists for this OAuth user
         const { data: existingProfile, error: profileError } = await supabase
             .from('profiles')
             .select('*')
-            .eq('email', email)
+            .eq('id', userId)
             .single();
 
         if (profileError && profileError.code !== 'PGRST116') {
             console.error('[OAuth] Error checking profile:', profileError);
         }
 
-        if (existingProfile && existingProfile.id !== userId) {
-            // Email exists but different user ID (email/password account)
-            console.log('[OAuth] Found existing account, merging...');
-
-            // Update the existing profile to link with OAuth user ID
-            const { error: updateError } = await supabase
-                .from('profiles')
-                .update({
-                    oauth_provider: provider,
-                    oauth_user_id: userId,
-                    picture: oauthUser.user_metadata?.avatar_url || existingProfile.picture,
-                    updated_at: new Date().toISOString()
-                })
-                .eq('id', existingProfile.id);
-
-            if (updateError) {
-                console.error('[OAuth] Error updating profile:', updateError);
-            } else {
-                console.log('[OAuth] ✅ Account linked successfully');
-            }
-
-            // Delete the duplicate OAuth auth entry if it was created
-            // (Supabase might auto-create it)
-            const { error: deleteError } = await supabase.auth.admin.deleteUser(userId);
-            if (deleteError) {
-                console.error('[OAuth] Could not delete duplicate user:', deleteError);
-            }
-
-            return {
-                success: true,
-                merged: true,
-                profileId: existingProfile.id
-            };
-        }
-
-        // No existing profile, or same user ID - create/update profile
         const profileData = {
             id: userId,
             email: email,
-            full_name: oauthUser.user_metadata?.full_name || oauthUser.user_metadata?.name || email.split('@')[0],
-            phone: oauthUser.phone || null,
-            picture: oauthUser.user_metadata?.avatar_url || null,
+            full_name: oauthUser.user_metadata?.full_name ||
+                oauthUser.user_metadata?.name ||
+                email.split('@')[0],
+            picture: oauthUser.user_metadata?.avatar_url ||
+                oauthUser.user_metadata?.picture || null,
             oauth_provider: provider,
             oauth_user_id: userId,
             email_verified: true, // OAuth emails are pre-verified
-            created_at: new Date().toISOString(),
             updated_at: new Date().toISOString()
         };
 
-        // Upsert profile
-        const { error: upsertError } = await supabase
-            .from('profiles')
-            .upsert(profileData, { onConflict: 'id' });
+        if (existingProfile) {
+            // Profile exists, update it
+            console.log('[OAuth] Updating existing profile');
 
-        if (upsertError) {
-            console.error('[OAuth] Error creating/updating profile:', upsertError);
-            return { success: false, error: upsertError.message };
+            const { error: updateError } = await supabase
+                .from('profiles')
+                .update(profileData)
+                .eq('id', userId);
+
+            if (updateError) {
+                console.error('[OAuth] Error updating profile:', updateError);
+                return { success: false, error: updateError.message };
+            }
+
+            console.log('[OAuth] ✅ Profile updated successfully');
+
+            return {
+                success: true,
+                merged: false,
+                profileId: userId,
+                isExisting: true
+            };
+
+        } else {
+            // No profile yet, create new one
+            console.log('[OAuth] Creating new profile');
+
+            profileData.created_at = new Date().toISOString();
+
+            const { error: insertError } = await supabase
+                .from('profiles')
+                .insert(profileData);
+
+            if (insertError) {
+                console.error('[OAuth] Error creating profile:', insertError);
+                return { success: false, error: insertError.message };
+            }
+
+            console.log('[OAuth] ✅ Profile created successfully');
+
+            return {
+                success: true,
+                merged: false,
+                profileId: userId,
+                isExisting: false
+            };
         }
-
-        console.log('[OAuth] ✅ Profile created/updated successfully');
-
-        return {
-            success: true,
-            merged: false,
-            profileId: userId
-        };
 
     } catch (err) {
         console.error('[OAuth] Unexpected error:', err);
