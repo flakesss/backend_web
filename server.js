@@ -217,26 +217,6 @@ const optionalAuth = async (req, res, next) => {
   next();
 };
 
-// Admin check middleware
-const requireAdmin = async (req, res, next) => {
-  if (!req.user) {
-    return res.status(401).json({ error: "Unauthorized" });
-  }
-
-  // Check if user has admin role in profiles table
-  const { data: profile, error } = await supabaseAdmin
-    .from("profiles")
-    .select("role")
-    .eq("id", req.user.id)
-    .single();
-
-  if (error || !profile || profile.role !== "admin") {
-    return res.status(403).json({ error: "Forbidden: Admin access required" });
-  }
-
-  next();
-};
-
 // ============================================================
 // ROUTES: Authentication
 // ============================================================
