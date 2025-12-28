@@ -41,7 +41,6 @@ async function handleOAuthUser(oauthUser) {
                 oauthUser.user_metadata?.picture || null,
             oauth_provider: provider,
             oauth_user_id: userId,
-            email_verified: true, // OAuth emails are pre-verified
             updated_at: new Date().toISOString()
         };
 
