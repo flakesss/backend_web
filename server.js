@@ -2450,6 +2450,9 @@ app.get("/coupons/available", requireAuth, async (req, res) => {
       return res.status(500).json({ error: "Gagal mengambil voucher" });
     }
 
+    console.log('[Available Coupons] Total fetched from DB:', data?.length || 0);
+    console.log('[Available Coupons] Vouchers:', data?.map(c => ({ code: c.code, quota: c.quota, times_used: c.times_used, valid_until: c.valid_until })));
+
     // Filter out expired coupons
     const now = new Date();
     const validCoupons = (data || []).filter(coupon => {
@@ -2457,14 +2460,31 @@ app.get("/coupons/available", requireAuth, async (req, res) => {
       if (!coupon.valid_until) return true;
 
       const validUntil = new Date(coupon.valid_until);
-      return validUntil > now;
+      const isValid = validUntil > now;
+
+      if (!isValid) {
+        console.log(`[Available Coupons] Filtered (expired): ${coupon.code}, valid_until: ${coupon.valid_until}`);
+      }
+
+      return isValid;
     });
+
+    console.log('[Available Coupons] After expiry filter:', validCoupons.length);
 
     // Filter out coupons that have no remaining quota
     const availableCoupons = validCoupons.filter(coupon => {
       const remainingQuota = coupon.quota - (coupon.times_used || 0);
-      return remainingQuota > 0;
+      const hasQuota = remainingQuota > 0;
+
+      if (!hasQuota) {
+        console.log(`[Available Coupons] Filtered (no quota): ${coupon.code}, quota: ${coupon.quota}, times_used: ${coupon.times_used}, remaining: ${remainingQuota}`);
+      }
+
+      return hasQuota;
     });
+
+    console.log('[Available Coupons] Final available:', availableCoupons.length);
+    console.log('[Available Coupons] Returning:', availableCoupons.map(c => c.code));
 
     res.json({ coupons: availableCoupons });
 

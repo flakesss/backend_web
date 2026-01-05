@@ -153,14 +153,17 @@ SELECT
   c.discount_amount,
   c.discount_type,
   c.quota,
+  c.max_uses_per_user,
   c.is_active,
   c.valid_from,
   c.valid_until,
+  c.created_at,
+  c.updated_at,
   COUNT(cu.id) as times_used,
   c.quota + COUNT(cu.id) as original_quota
 FROM coupons c
 LEFT JOIN coupon_uses cu ON c.id = cu.coupon_id
-GROUP BY c.id, c.code, c.discount_amount, c.discount_type, c.quota, c.is_active, c.valid_from, c.valid_until;
+GROUP BY c.id, c.code, c.discount_amount, c.discount_type, c.quota, c.max_uses_per_user, c.is_active, c.valid_from, c.valid_until, c.created_at, c.updated_at;
 
 -- Verification query
 SELECT * FROM coupon_stats;
