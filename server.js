@@ -1046,6 +1046,15 @@ app.post("/orders", requireAuth, async (req, res) => {
     return res.status(400).json({ error: "Amount information is required" });
   }
 
+  // Validate minimum product price (Rp 10,000)
+  const MIN_PRODUCT_PRICE = 10000;
+  if (finalProductPrice < MIN_PRODUCT_PRICE) {
+    return res.status(400).json({
+      error: `Nominal produk minimum adalah Rp ${MIN_PRODUCT_PRICE.toLocaleString('id-ID')}`,
+      min_amount: MIN_PRODUCT_PRICE
+    });
+  }
+
   try {
     const orderNumber = generateOrderNumber();
 
