@@ -121,6 +121,46 @@ app.get("/coupons/my-usage", requireAuth, async (req, res) => {
     }
 });
 
+// Get Available Coupons (Public for logged-in users)
+app.get("/coupons/available", requireAuth, async (req, res) => {
+    try {
+        // Get active coupons that are still valid
+        const { data, error } = await supabaseAdmin
+            .from('coupon_stats')
+            .select('*')
+            .eq('is_active', true)
+            .gt('quota', 0)
+            .order('created_at', { ascending: false });
+
+        if (error) {
+            console.error('[Available Coupons] Error:', error);
+            return res.status(500).json({ error: "Gagal mengambil voucher" });
+        }
+
+        // Filter out expired coupons
+        const now = new Date();
+        const validCoupons = (data || []).filter(coupon => {
+            // If no valid_until, coupon never expires
+            if (!coupon.valid_until) return true;
+
+            const validUntil = new Date(coupon.valid_until);
+            return validUntil > now;
+        });
+
+        // Filter out coupons that have no remaining quota
+        const availableCoupons = validCoupons.filter(coupon => {
+            const remainingQuota = coupon.quota - (coupon.times_used || 0);
+            return remainingQuota > 0;
+        });
+
+        res.json({ coupons: availableCoupons });
+
+    } catch (err) {
+        console.error('[Available Coupons] Error:', err);
+        res.status(500).json({ error: "Internal server error" });
+    }
+});
+
 // ============================================================
 // ADMIN COUPON ENDPOINTS
 // ============================================================
