@@ -1248,6 +1248,186 @@ app.patch("/orders/:id/status", requireAuth, async (req, res) => {
   }
 });
 
+
+// ============================================================
+// ROUTES: Order Cancellation
+// ============================================================
+
+// Cancel Order (Seller Only - Auto-cancel or Request Approval)
+app.post("/orders/:id/cancel", requireAuth, async (req, res) => {
+  const { id } = req.params;
+  const { reason } = req.body;
+  const userId = req.user.id;
+
+  try {
+    if (!reason || reason.trim().length < 10) {
+      return res.status(400).json({
+        error: "Alasan pembatalan harus diisi (minimal 10 karakter)"
+      });
+    }
+
+    // Get order
+    const { data: order, error: orderError } = await supabaseAdmin
+      .from('orders')
+      .select('*')
+      .eq('id', id)
+      .single();
+
+    if (orderError || !order) {
+      return res.status(404).json({ error: "Pesanan tidak ditemukan" });
+    }
+
+    // Verify seller
+    if (order.seller_id !== userId) {
+      return res.status(403).json({
+        error: "Hanya penjual yang dapat membatalkan pesanan"
+      });
+    }
+
+    // Check if already cancelled
+    if (order.cancelled_at) {
+      return res.status(400).json({
+        error: "Pesanan sudah dibatalkan sebelumnya"
+      });
+    }
+
+    // Check if order is completed/delivered
+    if (order.status === 'completed' || order.status === 'delivered') {
+      return res.status(400).json({
+        error: "Tidak dapat membatalkan pesanan yang sudah selesai"
+      });
+    }
+
+    // Check if payment proof exists
+    const { data: paymentProof } = await supabaseAdmin
+      .from('payment_proofs')
+      .select('id')
+      .eq('order_id', id)
+      .maybeSingle();
+
+    // AUTO-CANCEL if no payment proof
+    if (!paymentProof) {
+      const { error: cancelError } = await supabaseAdmin
+        .from('orders')
+        .update({
+          cancelled_at: new Date().toISOString(),
+          cancellation_reason: reason,
+          cancelled_by: userId,
+          status: 'cancelled'
+        })
+        .eq('id', id);
+
+      if (cancelError) {
+        console.error('[Cancel Order] Error:', cancelError);
+        return res.status(500).json({ error: "Gagal membatalkan pesanan" });
+      }
+
+      console.log(`[Cancel Order] Order ${id} cancelled automatically by seller ${userId}`);
+
+      return res.json({
+        success: true,
+        message: "Pesanan berhasil dibatalkan",
+        cancelled_immediately: true
+      });
+    }
+
+    // CREATE CANCELLATION REQUEST if payment proof exists
+    const { data: request, error: requestError } = await supabaseAdmin
+      .from('order_cancellation_requests')
+      .insert({
+        order_id: id,
+        requested_by: userId,
+        reason: reason,
+        status: 'pending'
+      })
+      .select()
+      .single();
+
+    if (requestError) {
+      console.error('[Cancel Request] Error:', requestError);
+      return res.status(500).json({ error: "Gagal membuat permintaan pembatalan" });
+    }
+
+    console.log(`[Cancel Request] Cancellation request created for order ${id} by seller ${userId}`);
+
+    return res.json({
+      success: true,
+      message: "Permintaan pembatalan telah dikirim ke admin untuk ditinjau",
+      cancelled_immediately: false,
+      request_id: request.id
+    });
+
+  } catch (err) {
+    console.error('[Cancel Order] Error:', err);
+    res.status(500).json({ error: "Internal server error" });
+  }
+});
+
+// Get Cancellation Request Status for Order
+app.get("/orders/:id/cancellation-request", requireAuth, async (req, res) => {
+  const { id } = req.params;
+  const userId = req.user.id;
+
+  try {
+    // Verify user has access to this order
+    const { data: order } = await supabaseAdmin
+      .from('orders')
+      .select('seller_id, buyer_id')
+      .eq('id', id)
+      .single();
+
+    if (!order || (order.seller_id !== userId && order.buyer_id !== userId)) {
+      return res.status(403).json({ error: "Tidak memiliki akses ke pesanan ini" });
+    }
+
+    // Get cancellation request
+    const { data: request, error } = await supabaseAdmin
+      .from('order_cancellation_requests')
+      .select('*')
+      .eq('order_id', id)
+      .order('requested_at', { ascending: false })
+      .maybeSingle();
+
+    if (error) {
+      console.error('[Get Cancellation Request] Error:', error);
+      return res.status(500).json({ error: "Gagal mengambil data" });
+    }
+
+    res.json({
+      has_request: !!request,
+      request: request || null
+    });
+
+  } catch (err) {
+    console.error('[Get Cancellation Request] Error:', err);
+    res.status(500).json({ error: "Internal server error" });
+  }
+});
+
+// Get User's Cancellation Requests
+app.get("/orders/my-cancellation-requests", requireAuth, async (req, res) => {
+  const userId = req.user.id;
+
+  try {
+    const { data, error } = await supabaseAdmin
+      .from('cancellation_requests_view')
+      .select('*')
+      .eq('requested_by', userId)
+      .order('requested_at', { ascending: false });
+
+    if (error) {
+      console.error('[My Cancellation Requests] Error:', error);
+      return res.status(500).json({ error: "Gagal mengambil data" });
+    }
+
+    res.json({ requests: data || [] });
+
+  } catch (err) {
+    console.error('[My Cancellation Requests] Error:', err);
+    res.status(500).json({ error: "Internal server error" });
+  }
+});
+
 // ============================================================
 // ROUTES: Buyer Confirmation
 // ============================================================
@@ -1592,6 +1772,115 @@ app.patch("/admin/payment-proofs/:id", requireAuth, requireAdmin, async (req, re
   } catch (err) {
     console.error("Admin update payment proof error:", err);
     res.status(500).json({ error: "Failed to update payment proof" });
+  }
+});
+
+// Get Cancellation Requests (Admin)
+app.get("/admin/cancellation-requests", requireAuth, requireAdmin, async (req, res) => {
+  try {
+    const { status } = req.query; // pending, approved, rejected
+
+    let query = supabaseAdmin
+      .from('cancellation_requests_view')
+      .select('*');
+
+    if (status) {
+      query = query.eq('status', status);
+    }
+
+    const { data, error } = await query.order('requested_at', { ascending: false });
+
+    if (error) {
+      console.error('[Admin Cancellation Requests] Error:', error);
+      return res.status(500).json({ error: "Gagal mengambil data" });
+    }
+
+    res.json({ requests: data || [] });
+
+  } catch (err) {
+    console.error('[Admin Cancellation Requests] Error:', err);
+    res.status(500).json({ error: "Internal server error" });
+  }
+});
+
+// Approve or Reject Cancellation Request (Admin)
+app.patch("/admin/cancellation-requests/:id", requireAuth, requireAdmin, async (req, res) => {
+  const { id } = req.params;
+  const { action, admin_notes } = req.body; // action: 'approve' or 'reject'
+  const adminId = req.user.id;
+
+  try {
+    if (!action || !['approve', 'reject'].includes(action)) {
+      return res.status(400).json({
+        error: "Action harus 'approve' atau 'reject'"
+      });
+    }
+
+    // Get cancellation request
+    const { data: request, error: requestError } = await supabaseAdmin
+      .from('order_cancellation_requests')
+      .select('*, orders(*)')
+      .eq('id', id)
+      .single();
+
+    if (requestError || !request) {
+      return res.status(404).json({ error: "Permintaan tidak ditemukan" });
+    }
+
+    if (request.status !== 'pending') {
+      return res.status(400).json({
+        error: "Permintaan sudah diproses sebelumnya"
+      });
+    }
+
+    // Update request status
+    const newStatus = action === 'approve' ? 'approved' : 'rejected';
+    const { error: updateError } = await supabaseAdmin
+      .from('order_cancellation_requests')
+      .update({
+        status: newStatus,
+        reviewed_by: adminId,
+        reviewed_at: new Date().toISOString(),
+        admin_notes: admin_notes || null
+      })
+      .eq('id', id);
+
+    if (updateError) {
+      console.error('[Admin Cancel Request Update] Error:', updateError);
+      return res.status(500).json({ error: "Gagal memperbarui permintaan" });
+    }
+
+    // If approved, cancel the order
+    if (action === 'approve') {
+      const { error: cancelError } = await supabaseAdmin
+        .from('orders')
+        .update({
+          cancelled_at: new Date().toISOString(),
+          cancellation_reason: request.reason,
+          cancelled_by: request.requested_by,
+          status: 'cancelled'
+        })
+        .eq('id', request.order_id);
+
+      if (cancelError) {
+        console.error('[Admin Cancel Order] Error:', cancelError);
+        return res.status(500).json({ error: "Gagal membatalkan pesanan" });
+      }
+
+      console.log(`[Admin Approve Cancel] Order ${request.order_id} cancelled by admin ${adminId}`);
+    }
+
+    res.json({
+      success: true,
+      message: action === 'approve'
+        ? "Permintaan pembatalan disetujui. Pesanan dibatalkan."
+        : "Permintaan pembatalan ditolak.",
+      order_cancelled: action === 'approve'
+    });
+
+  } catch (err) {
+    console.error('[Admin Cancel Request] Error:', err);
+    res.status(500).json({ error: "Internal server error" });
   }
 });
 
