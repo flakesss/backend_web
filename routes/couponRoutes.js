@@ -15,6 +15,46 @@ app.post("/coupons/check", requireAuth, async (req, res) => {
             return res.status(400).json({ error: "Kode kupon harus diisi" });
         }
 
+        // Get coupon details first
+        const { data: couponData, error: couponError } = await supabaseAdmin
+            .from('coupons')
+            .select('*')
+            .eq('code', code.toUpperCase())
+            .single();
+
+        if (couponError || !couponData) {
+            return res.status(400).json({
+                success: false,
+                message: "Kode kupon tidak valid"
+            });
+        }
+
+        // Check if it's a PRIVATE voucher
+        if (couponData.voucher_type === 'private') {
+            // Verify user has access to this private voucher
+            const { data: assignment, error: assignError } = await supabaseAdmin
+                .from('user_vouchers')
+                .select('*')
+                .eq('coupon_id', couponData.id)
+                .eq('user_id', userId)
+                .single();
+
+            if (assignError || !assignment) {
+                return res.status(403).json({
+                    success: false,
+                    message: "Voucher ini tidak tersedia untuk Anda"
+                });
+            }
+
+            // Check if already claimed
+            if (assignment.is_claimed) {
+                return res.status(400).json({
+                    success: false,
+                    message: "Anda sudah menggunakan voucher ini"
+                });
+            }
+        }
+
         // Call database function to validate coupon
         const { data, error } = await supabaseAdmin.rpc('check_coupon_validity', {
             coupon_code: code.toUpperCase(),
@@ -39,7 +79,8 @@ app.post("/coupons/check", requireAuth, async (req, res) => {
             success: true,
             discount_amount: result.discount_amount,
             discount_type: result.discount_type,
-            message: result.message
+            message: result.message,
+            voucher_type: couponData.voucher_type
         });
 
     } catch (err) {
@@ -71,6 +112,26 @@ app.post("/coupons/use", requireAuth, async (req, res) => {
             return res.status(400).json({
                 error: "Gagal menggunakan kupon. Mungkin kuota habis atau kupon tidak valid."
             });
+        }
+
+        // If it's a private voucher, mark as claimed
+        const { data: couponInfo } = await supabaseAdmin
+            .from('coupons')
+            .select('id, voucher_type')
+            .eq('code', code.toUpperCase())
+            .single();
+
+        if (couponInfo && couponInfo.voucher_type === 'private') {
+            await supabaseAdmin
+                .from('user_vouchers')
+                .update({
+                    is_claimed: true,
+                    claimed_at: new Date().toISOString()
+                })
+                .eq('coupon_id', couponInfo.id)
+                .eq('user_id', userId);
+
+            console.log(`[Coupon Use] Private voucher ${code} marked as claimed for user ${userId}`);
         }
 
         res.json({

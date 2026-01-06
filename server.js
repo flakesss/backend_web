@@ -2443,57 +2443,95 @@ app.get("/coupons/my-usage", requireAuth, async (req, res) => {
   }
 });
 
-// Get Available Coupons (Public for logged-in users)
+// Get Available Coupons (Public + User's Private Vouchers)
 app.get("/coupons/available", requireAuth, async (req, res) => {
   try {
-    // Get active coupons that are still valid
-    const { data, error } = await supabaseAdmin
+    const userId = req.user.id;
+
+    // 1. Get PUBLIC vouchers (everyone can see)
+    const { data: publicVouchers, error: publicError } = await supabaseAdmin
       .from('coupon_stats')
       .select('*')
       .eq('is_active', true)
+      .eq('voucher_type', 'public')
       .gt('quota', 0)
       .order('created_at', { ascending: false });
 
-    if (error) {
-      console.error('[Available Coupons] Error:', error);
+    if (publicError) {
+      console.error('[Available Coupons] Public Error:', publicError);
       return res.status(500).json({ error: "Gagal mengambil voucher" });
     }
 
-    console.log('[Available Coupons] Total fetched from DB:', data?.length || 0);
-    console.log('[Available Coupons] Vouchers:', data?.map(c => ({ code: c.code, quota: c.quota, times_used: c.times_used, valid_until: c.valid_until })));
+    // 2. Get PRIVATE vouchers assigned to this user
+    const { data: privateAssignments, error: privateError } = await supabaseAdmin
+      .from('user_vouchers')
+      .select(`
+                *,
+                coupons:coupon_id (
+                    id,
+                    code,
+                    description,
+                    discount_amount,
+                    discount_type,
+                    quota,
+                    max_uses_per_user,
+                    voucher_type,
+                    is_active,
+                    valid_from,
+                    valid_until,
+                    created_at,
+                    updated_at
+                )
+            `)
+      .eq('user_id', userId)
+      .eq('is_claimed', false);
+
+    if (privateError) {
+      console.error('[Available Coupons] Private Error:', privateError);
+      // Continue without private vouchers if error
+    }
+
+    // Extract coupon data from private assignments
+    const privateVouchers = (privateAssignments || [])
+      .map(assignment => assignment.coupons)
+      .filter(coupon => coupon && coupon.is_active);
+
+    // Combine public and private vouchers
+    const allVouchers = [...(publicVouchers || []), ...(privateVouchers || [])];
+
+    console.log('[Available Coupons] Public:', publicVouchers?.length || 0);
+    console.log('[Available Coupons] Private (for user):', privateVouchers?.length || 0);
+    console.log('[Available Coupons] Total:', allVouchers.length);
 
     // Filter out expired coupons
     const now = new Date();
-    const validCoupons = (data || []).filter(coupon => {
-      // If no valid_until, coupon never expires
+    const validCoupons = allVouchers.filter(coupon => {
       if (!coupon.valid_until) return true;
 
       const validUntil = new Date(coupon.valid_until);
       const isValid = validUntil > now;
 
       if (!isValid) {
-        console.log(`[Available Coupons] Filtered (expired): ${coupon.code}, valid_until: ${coupon.valid_until}`);
+        console.log(`[Available Coupons] Filtered (expired): ${coupon.code}`);
       }
 
       return isValid;
     });
 
-    console.log('[Available Coupons] After expiry filter:', validCoupons.length);
-
-    // Filter out coupons that have no remaining quota
+    // Filter out coupons with no remaining quota
     const availableCoupons = validCoupons.filter(coupon => {
       const remainingQuota = coupon.quota - (coupon.times_used || 0);
       const hasQuota = remainingQuota > 0;
 
       if (!hasQuota) {
-        console.log(`[Available Coupons] Filtered (no quota): ${coupon.code}, quota: ${coupon.quota}, times_used: ${coupon.times_used}, remaining: ${remainingQuota}`);
+        console.log(`[Available Coupons] Filtered (no quota): ${coupon.code}`);
       }
 
       return hasQuota;
     });
 
     console.log('[Available Coupons] Final available:', availableCoupons.length);
-    console.log('[Available Coupons] Returning:', availableCoupons.map(c => c.code));
+    console.log('[Available Coupons] Codes:', availableCoupons.map(c => `${c.code} (${c.voucher_type})`));
 
     res.json({ coupons: availableCoupons });
 
