@@ -2432,6 +2432,146 @@ app.get("/", (req, res) => {
 });
 
 // ============================================================
+// ROUTES: Push Notifications
+// ============================================================
+
+const { sendNotification, broadcastNotification } = require('./utils/sendNotification');
+
+// Subscribe to push notifications
+app.post("/notifications/subscribe", requireAuth, async (req, res) => {
+  const { fcm_token, device_type, device_name } = req.body;
+  const userId = req.user.id;
+
+  if (!fcm_token) {
+    return res.status(400).json({ error: "FCM token is required" });
+  }
+
+  try {
+    // Upsert token (update if exists, insert if new)
+    const { data, error } = await supabaseAdmin
+      .from('fcm_tokens')
+      .upsert({
+        user_id: userId,
+        token: fcm_token,
+        device_type: device_type || 'web',
+        device_name: device_name || null,
+        last_used_at: new Date().toISOString(),
+        is_active: true
+      }, {
+        onConflict: 'token',
+        ignoreDuplicates: false
+      })
+      .select()
+      .single();
+
+    if (error) {
+      console.error('[Subscribe] Error:', error);
+      throw error;
+    }
+
+    console.log(`[Subscribe] User ${userId} subscribed to push notifications`);
+
+    res.json({
+      success: true,
+      message: 'Successfully subscribed to notifications',
+      token_id: data.id
+    });
+  } catch (err) {
+    console.error('[Subscribe] Error:', err);
+    res.status(500).json({ error: 'Failed to subscribe to notifications' });
+  }
+});
+
+// Unsubscribe from push notifications
+app.delete("/notifications/unsubscribe", requireAuth, async (req, res) => {
+  const { fcm_token } = req.body;
+  const userId = req.user.id;
+
+  if (!fcm_token) {
+    return res.status(400).json({ error: "FCM token is required" });
+  }
+
+  try {
+    const { error } = await supabaseAdmin
+      .from('fcm_tokens')
+      .delete()
+      .eq('user_id', userId)
+      .eq('token', fcm_token);
+
+    if (error) throw error;
+
+    console.log(`[Unsubscribe] User ${userId} unsubscribed`);
+
+    res.json({
+      success: true,
+      message: 'Successfully unsubscribed from notifications'
+    });
+  } catch (err) {
+    console.error('[Unsubscribe] Error:', err);
+    res.status(500).json({ error: 'Failed to unsubscribe' });
+  }
+});
+
+// Get user's active devices/tokens (optional, for settings page)
+app.get("/notifications/devices", requireAuth, async (req, res) => {
+  const userId = req.user.id;
+
+  try {
+    const { data, error } = await supabaseAdmin
+      .from('fcm_tokens')
+      .select('id, device_type, device_name, created_at, last_used_at')
+      .eq('user_id', userId)
+      .eq('is_active', true)
+      .order('last_used_at', { ascending: false });
+
+    if (error) throw error;
+
+    res.json({ devices: data || [] });
+  } catch (err) {
+    console.error('[GetDevices] Error:', err);
+    res.status(500).json({ error: 'Failed to get devices' });
+  }
+});
+
+// Admin: Broadcast notification to all users
+app.post("/admin/broadcast-notification", requireAuth, requireAdmin, async (req, res) => {
+  const { title, message, url, image } = req.body;
+
+  if (!title || !message) {
+    return res.status(400).json({ error: "Title and message are required" });
+  }
+
+  try {
+    const result = await broadcastNotification(
+      {
+        title,
+        body: message,
+        image: image || null
+      },
+      {
+        type: 'broadcast',
+        url: url || '/home'
+      }
+    );
+
+    if (!result.success) {
+      throw new Error(result.error || result.message);
+    }
+
+    console.log(`[AdminBroadcast] Sent to ${result.successCount} devices`);
+
+    res.json({
+      success: true,
+      message: `Notification sent to ${result.successCount} devices`,
+      details: result
+    });
+  } catch (err) {
+    console.error('[AdminBroadcast] Error:', err);
+    res.status(500).json({ error: 'Failed to broadcast notification' });
+  }
+});
+
+// ============================================================
 // Start Server
 // ============================================================
 app.listen(port, () => {

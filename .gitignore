@@ -1,2 +1,6 @@
 node_modules/
 .env
+
+# Firebase credentials (NEVER commit this!)
+config/firebase-service-account.json
+firebase-service-account.json
