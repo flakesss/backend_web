@@ -1056,6 +1056,34 @@ app.post("/orders", requireAuth, async (req, res) => {
   }
 
   try {
+    // RATE LIMITING: Check if user has created an order recently
+    const COOLDOWN_MINUTES = 2; // 2 minutes cooldown
+    const { data: recentOrders, error: checkError } = await supabaseAdmin
+      .from('orders')
+      .select('created_at')
+      .eq('seller_id', req.user.id)
+      .order('created_at', { ascending: false })
+      .limit(1);
+
+    if (!checkError && recentOrders && recentOrders.length > 0) {
+      const lastOrderTime = new Date(recentOrders[0].created_at);
+      const now = new Date();
+      const diffMinutes = (now - lastOrderTime) / 1000 / 60;
+
+      if (diffMinutes < COOLDOWN_MINUTES) {
+        const remainingSeconds = Math.ceil((COOLDOWN_MINUTES - diffMinutes) * 60);
+        const remainingMinutes = Math.floor(remainingSeconds / 60);
+        const remainingSecondsDisplay = remainingSeconds % 60;
+
+        return res.status(429).json({
+          error: "Terlalu cepat membuat pesanan",
+          message: `Harap tunggu ${remainingMinutes > 0 ? `${remainingMinutes} menit ` : ''}${remainingSecondsDisplay} detik sebelum membuat pesanan baru`,
+          cooldown_remaining_seconds: remainingSeconds,
+          retry_after: new Date(lastOrderTime.getTime() + COOLDOWN_MINUTES * 60 * 1000).toISOString()
+        });
+      }
+    }
+
     const orderNumber = generateOrderNumber();
 
     // Create order with fee breakdown
