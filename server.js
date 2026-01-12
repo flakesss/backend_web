@@ -1017,6 +1017,58 @@ app.get("/company-bank-accounts", async (req, res) => {
 });
 
 // ============================================================
+// ROUTES: User Profile & Social Media
+// ============================================================
+
+// Update user social media links
+app.put("/profile/social-media", requireAuth, async (req, res) => {
+  try {
+    const userId = req.user.id;
+    const { instagram_url, tiktok_url, facebook_url } = req.body;
+
+    // Validate URLs if provided (basic validation)
+    const validateUrl = (url, platform) => {
+      if (!url) return null; // Allow empty/null
+
+      // Remove whitespace
+      const trimmedUrl = url.trim();
+      if (!trimmedUrl) return null;
+
+      // Must start with http:// or https://
+      if (!trimmedUrl.startsWith('http://') && !trimmedUrl.startsWith('https://')) {
+        throw new Error(`${platform} URL must start with http:// or https://`);
+      }
+
+      return trimmedUrl;
+    };
+
+    const validatedData = {
+      instagram_url: validateUrl(instagram_url, 'Instagram'),
+      tiktok_url: validateUrl(tiktok_url, 'TikTok'),
+      facebook_url: validateUrl(facebook_url, 'Facebook'),
+      updated_at: new Date().toISOString()
+    };
+
+    const { data, error } = await supabaseAdmin
+      .from("profiles")
+      .update(validatedData)
+      .eq("id", userId)
+      .select()
+      .single();
+
+    if (error) throw error;
+
+    res.json({
+      message: "Social media links updated successfully",
+      user: data
+    });
+  } catch (err) {
+    console.error("Update social media error:", err);
+    res.status(400).json({ error: err.message || "Failed to update social media links" });
+  }
+});
+
+// ============================================================
 // ROUTES: Orders (Seller creates, Buyer pays)
 // ============================================================
 
