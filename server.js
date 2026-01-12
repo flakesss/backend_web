@@ -642,7 +642,7 @@ app.get("/auth/me", requireAuth, async (req, res) => {
 
 // Update user profile
 app.patch("/auth/me", requireAuth, async (req, res) => {
-  const { full_name, phone } = req.body;
+  const { full_name, phone, instagram_url, tiktok_url, facebook_url } = req.body;
 
   try {
     // Normalize phone number to +62 format
@@ -666,12 +666,15 @@ app.patch("/auth/me", requireAuth, async (req, res) => {
       // Other formats - keep as user entered
     }
 
-    // Update profile in database
+    // Update profile in database (including social media)
     const { data, error } = await supabaseAdmin
       .from("profiles")
       .update({
         full_name: full_name || null,
         phone: normalizedPhone || null,
+        instagram_url: instagram_url || null,
+        tiktok_url: tiktok_url || null,
+        facebook_url: facebook_url || null,
         updated_at: new Date().toISOString()
       })
       .eq("id", req.user.id)
