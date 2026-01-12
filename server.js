@@ -2572,6 +2572,207 @@ app.post("/admin/broadcast-notification", requireAuth, requireAdmin, async (req,
 });
 
 // ============================================================
+// ROUTES: Legal Documents (Terms & Privacy)
+// ============================================================
+
+// Get active Terms of Service
+app.get("/legal/terms", async (req, res) => {
+  try {
+    const { data, error } = await supabaseAdmin
+      .from('legal_documents')
+      .select('id, title, content, version, effective_date, updated_at')
+      .eq('type', 'terms_of_service')
+      .eq('is_active', true)
+      .single();
+
+    if (error) throw error;
+
+    if (!data) {
+      return res.status(404).json({ error: 'Terms of Service not found' });
+    }
+
+    res.json(data);
+  } catch (err) {
+    console.error('[GetTerms] Error:', err);
+    res.status(500).json({ error: 'Failed to get Terms of Service' });
+  }
+});
+
+// Get active Privacy Policy
+app.get("/legal/privacy", async (req, res) => {
+  try {
+    const { data, error } = await supabaseAdmin
+      .from('legal_documents')
+      .select('id, title, content, version, effective_date, updated_at')
+      .eq('type', 'privacy_policy')
+      .eq('is_active', true)
+      .single();
+
+    if (error) throw error;
+
+    if (!data) {
+      return res.status(404).json({ error: 'Privacy Policy not found' });
+    }
+
+    res.json(data);
+  } catch (err) {
+    console.error('[GetPrivacy] Error:', err);
+    res.status(500).json({ error: 'Failed to get Privacy Policy' });
+  }
+});
+
+// Get both Terms and Privacy (for registration page)
+app.get("/legal/all", async (req, res) => {
+  try {
+    const { data, error } = await supabaseAdmin
+      .from('legal_documents')
+      .select('id, type, title, content, version, effective_date')
+      .eq('is_active', true)
+      .in('type', ['terms_of_service', 'privacy_policy']);
+
+    if (error) throw error;
+
+    const documents = {
+      terms: data.find(d => d.type === 'terms_of_service') || null,
+      privacy: data.find(d => d.type === 'privacy_policy') || null
+    };
+
+    res.json(documents);
+  } catch (err) {
+    console.error('[GetAllLegal] Error:', err);
+    res.status(500).json({ error: 'Failed to get legal documents' });
+  }
+});
+
+// Record user acceptance (called during registration or when user accepts updated terms)
+app.post("/legal/accept", requireAuth, async (req, res) => {
+  const { document_id, document_type } = req.body;
+  const userId = req.user.id;
+
+  if (!document_id || !document_type) {
+    return res.status(400).json({ error: 'Document ID and type are required' });
+  }
+
+  try {
+    // Get document version
+    const { data: document, error: docError } = await supabaseAdmin
+      .from('legal_documents')
+      .select('version')
+      .eq('id', document_id)
+      .single();
+
+    if (docError) throw docError;
+
+    // Get client IP and user agent
+    const ipAddress = req.headers['x-forwarded-for'] || req.connection.remoteAddress;
+    const userAgent = req.headers['user-agent'];
+
+    // Record acceptance
+    const { data, error } = await supabaseAdmin
+      .from('user_legal_acceptances')
+      .insert({
+        user_id: userId,
+        document_id: document_id,
+        document_type: document_type,
+        document_version: document.version,
+        ip_address: ipAddress,
+        user_agent: userAgent
+      })
+      .select()
+      .single();
+
+    if (error) {
+      // If already accepted (unique constraint), that's fine
+      if (error.code === '23505') {
+        return res.json({
+          success: true,
+          message: 'Document already accepted',
+          already_accepted: true
+        });
+      }
+      throw error;
+    }
+
+    console.log(`[LegalAcceptance] User ${userId} accepted ${document_type} v${document.version}`);
+
+    res.json({
+      success: true,
+      message: 'Legal document acceptance recorded',
+      acceptance: data
+    });
+  } catch (err) {
+    console.error('[AcceptLegal] Error:', err);
+    res.status(500).json({ error: 'Failed to record acceptance' });
+  }
+});
+
+// Get user's legal document acceptances
+app.get("/legal/my-acceptances", requireAuth, async (req, res) => {
+  const userId = req.user.id;
+
+  try {
+    const { data, error } = await supabaseAdmin
+      .from('user_legal_acceptances')
+      .select('document_type, document_version, accepted_at')
+      .eq('user_id', userId)
+      .order('accepted_at', { ascending: false });
+
+    if (error) throw error;
+
+    res.json({ acceptances: data || [] });
+  } catch (err) {
+    console.error('[GetAcceptances] Error:', err);
+    res.status(500).json({ error: 'Failed to get acceptances' });
+  }
+});
+
+// Admin: Update legal document (create new version)
+app.post("/admin/legal/update", requireAuth, requireAdmin, async (req, res) => {
+  const { type, title, content, version } = req.body;
+
+  if (!type || !content || !version) {
+    return res.status(400).json({ error: 'Type, content, and version are required' });
+  }
+
+  try {
+    // Deactivate current active document
+    await supabaseAdmin
+      .from('legal_documents')
+      .update({ is_active: false })
+      .eq('type', type)
+      .eq('is_active', true);
+
+    // Insert new version
+    const { data, error } = await supabaseAdmin
+      .from('legal_documents')
+      .insert({
+        type: type,
+        title: title,
+        content: content,
+        version: version,
+        effective_date: new Date().toISOString().split('T')[0],
+        is_active: true,
+        created_by: req.user.id
+      })
+      .select()
+      .single();
+
+    if (error) throw error;
+
+    console.log(`[AdminLegal] Updated ${type} to version ${version}`);
+
+    res.json({
+      success: true,
+      message: 'Legal document updated',
+      document: data
+    });
+  } catch (err) {
+    console.error('[UpdateLegal] Error:', err);
+    res.status(500).json({ error: 'Failed to update legal document' });
+  }
+});
+
+// ============================================================
 // Start Server
 // ============================================================
 app.listen(port, () => {
