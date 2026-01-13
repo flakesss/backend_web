@@ -1077,8 +1077,28 @@ app.post("/withdrawals", requireAuth, async (req, res) => {
     const { amount, bank_account_id } = req.body;
     const userId = req.user.id;
 
+    // Validation constants
+    const MIN_WITHDRAWAL = 10000;        // Rp 10,000
+    const MAX_WITHDRAWAL = 10000000;     // Rp 10,000,000 (10 juta)
+
     if (!amount || amount <= 0) {
       return res.status(400).json({ error: "Invalid amount" });
+    }
+
+    // Validate minimum withdrawal
+    if (amount < MIN_WITHDRAWAL) {
+      return res.status(400).json({
+        error: `Penarikan minimum Rp ${MIN_WITHDRAWAL.toLocaleString('id-ID')}`,
+        min_amount: MIN_WITHDRAWAL
+      });
+    }
+
+    // Validate maximum withdrawal
+    if (amount > MAX_WITHDRAWAL) {
+      return res.status(400).json({
+        error: `Penarikan maksimum Rp ${MAX_WITHDRAWAL.toLocaleString('id-ID')}`,
+        max_amount: MAX_WITHDRAWAL
+      });
     }
 
     if (!bank_account_id) {
@@ -1093,7 +1113,7 @@ app.post("/withdrawals", requireAuth, async (req, res) => {
 
     if (amount > balance.available_balance) {
       return res.status(400).json({
-        error: "Insufficient balance",
+        error: "Saldo tidak mencukupi",
         available: balance.available_balance
       });
     }
