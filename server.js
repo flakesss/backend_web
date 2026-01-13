@@ -1243,7 +1243,7 @@ app.get("/admin/withdrawals", requireAuth, requireAdmin, async (req, res) => {
       .from("withdrawals")
       .select(`
         *,
-        user:profiles!withdrawals_user_id_fkey(
+        user:profiles(
           id,
           full_name,
           email
