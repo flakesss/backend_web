@@ -1263,12 +1263,23 @@ app.get("/admin/withdrawals", requireAuth, requireAdmin, async (req, res) => {
 
     const { data, error } = await query;
 
-    if (error) throw error;
+    if (error) {
+      console.error("[Admin Withdrawals] Query error:", error);
+      throw error;
+    }
+
+    console.log(`[Admin Withdrawals] Found ${data?.length || 0} withdrawals`);
+    if (data && data.length > 0) {
+      console.log("[Admin Withdrawals] Sample:", data[0]);
+    }
 
     res.json(data);
   } catch (err) {
     console.error("Admin get withdrawals error:", err);
-    res.status(500).json({ error: "Failed to get withdrawals" });
+    res.status(500).json({
+      error: "Failed to get withdrawals",
+      details: err.message
+    });
   }
 });
 
