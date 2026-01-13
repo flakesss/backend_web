@@ -1125,6 +1125,7 @@ app.post("/withdrawals", requireAuth, async (req, res) => {
 app.get("/withdrawals", requireAuth, async (req, res) => {
   try {
     const userId = req.user.id;
+    console.log('[GET /withdrawals] Fetching withdrawals for user:', userId);
 
     const { data, error } = await req.authClient
       .from("withdrawals")
@@ -1139,12 +1140,24 @@ app.get("/withdrawals", requireAuth, async (req, res) => {
       .eq("user_id", userId)
       .order("created_at", { ascending: false });
 
-    if (error) throw error;
+    if (error) {
+      console.error('[GET /withdrawals] Database error:', error);
+      throw error;
+    }
 
-    res.json(data);
+    console.log('[GET /withdrawals] Success. Found', data?.length || 0, 'withdrawals');
+    res.json(data || []);
   } catch (err) {
-    console.error("Get withdrawals error:", err);
-    res.status(500).json({ error: "Failed to get withdrawals" });
+    console.error("[GET /withdrawals] Error details:", {
+      message: err.message,
+      code: err.code,
+      details: err.details,
+      hint: err.hint
+    });
+    res.status(500).json({
+      error: "Failed to get withdrawals",
+      details: err.message
+    });
   }
 });
 
