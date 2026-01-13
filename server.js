@@ -998,6 +998,271 @@ app.post("/bank-accounts", requireAuth, async (req, res) => {
 });
 
 // ============================================================
+// ROUTES: Withdrawals (Fund withdrawal system)
+// ============================================================
+
+// Get user's balance summary
+app.get("/withdrawals/balance", requireAuth, async (req, res) => {
+  try {
+    const userId = req.user.id;
+
+    // Get total from completed orders where user is seller
+    const { data: completedOrders, error: ordersError } = await req.authClient
+      .from("orders")
+      .select("product_price, platform_fee")
+      .eq("seller_id", userId)
+      .eq("status", "completed");
+
+    if (ordersError) throw ordersError;
+
+    // Calculate total earnings (product price only, platform fee excluded)
+    const totalEarnings = completedOrders.reduce((sum, order) => {
+      return sum + parseFloat(order.product_price || 0);
+    }, 0);
+
+    // Get total already withdrawn (approved + completed)
+    const { data: withdrawals, error: withdrawalsError } = await req.authClient
+      .from("withdrawals")
+      .select("amount")
+      .eq("user_id", userId)
+      .in("status", ["approved", "completed"]);
+
+    if (withdrawalsError) throw withdrawalsError;
+
+    const totalWithdrawn = withdrawals.reduce((sum, w) => {
+      return sum + parseFloat(w.amount || 0);
+    }, 0);
+
+    // Get pending withdrawals
+    const { data: pendingWithdrawals, error: pendingError } = await req.authClient
+      .from("withdrawals")
+      .select("amount")
+      .eq("user_id", userId)
+      .eq("status", "pending");
+
+    if (pendingError) throw pendingError;
+
+    const totalPending = pendingWithdrawals.reduce((sum, w) => {
+      return sum + parseFloat(w.amount || 0);
+    }, 0);
+
+    // Calculate available balance
+    const availableBalance = totalEarnings - totalWithdrawn - totalPending;
+
+    res.json({
+      total_earnings: totalEarnings,
+      total_withdrawn: totalWithdrawn,
+      pending_withdrawal: totalPending,
+      available_balance: Math.max(0, availableBalance),
+    });
+  } catch (err) {
+    console.error("Get balance error:", err);
+    res.status(500).json({ error: "Failed to get balance" });
+  }
+});
+
+// Create withdrawal request
+app.post("/withdrawals", requireAuth, async (req, res) => {
+  try {
+    const { amount, bank_account_id } = req.body;
+    const userId = req.user.id;
+
+    if (!amount || amount <= 0) {
+      return res.status(400).json({ error: "Invalid amount" });
+    }
+
+    if (!bank_account_id) {
+      return res.status(400).json({ error: "Bank account is required" });
+    }
+
+    // Check available balance
+    const balanceRes = await fetch(`${req.protocol}://${req.get('host')}/withdrawals/balance`, {
+      headers: { 'Authorization': req.headers.authorization }
+    });
+    const balance = await balanceRes.json();
+
+    if (amount > balance.available_balance) {
+      return res.status(400).json({
+        error: "Insufficient balance",
+        available: balance.available_balance
+      });
+    }
+
+    // Verify bank account belongs to user
+    const { data: bankAccount, error: bankError } = await req.authClient
+      .from("bank_accounts")
+      .select("id")
+      .eq("id", bank_account_id)
+      .eq("user_id", userId)
+      .single();
+
+    if (bankError || !bankAccount) {
+      return res.status(400).json({ error: "Invalid bank account" });
+    }
+
+    // Create withdrawal request
+    const { data, error } = await req.authClient
+      .from("withdrawals")
+      .insert({
+        user_id: userId,
+        amount: parseFloat(amount),
+        bank_account_id,
+        status: "pending",
+      })
+      .select()
+      .single();
+
+    if (error) throw error;
+
+    res.json(data);
+  } catch (err) {
+    console.error("Create withdrawal error:", err);
+    res.status(500).json({ error: "Failed to create withdrawal request" });
+  }
+});
+
+// Get user's withdrawals
+app.get("/withdrawals", requireAuth, async (req, res) => {
+  try {
+    const userId = req.user.id;
+
+    const { data, error } = await req.authClient
+      .from("withdrawals")
+      .select(`
+        *,
+        bank_account:bank_accounts(
+          bank_name,
+          account_number,
+          account_holder_name
+        )
+      `)
+      .eq("user_id", userId)
+      .order("created_at", { ascending: false });
+
+    if (error) throw error;
+
+    res.json(data);
+  } catch (err) {
+    console.error("Get withdrawals error:", err);
+    res.status(500).json({ error: "Failed to get withdrawals" });
+  }
+});
+
+// Cancel pending withdrawal (user only)
+app.patch("/withdrawals/:id/cancel", requireAuth, async (req, res) => {
+  try {
+    const { id } = req.params;
+    const userId = req.user.id;
+
+    // Update withdrawal to cancelled
+    const { data, error } = await req.authClient
+      .from("withdrawals")
+      .update({
+        status: "cancelled",
+        updated_at: new Date().toISOString()
+      })
+      .eq("id", id)
+      .eq("user_id", userId)
+      .eq("status", "pending") // Only pending can be cancelled
+      .select()
+      .single();
+
+    if (error) {
+      if (error.code === "PGRST116") {
+        return res.status(404).json({ error: "Withdrawal not found or cannot be cancelled" });
+      }
+      throw error;
+    }
+
+    res.json(data);
+  } catch (err) {
+    console.error("Cancel withdrawal error:", err);
+    res.status(500).json({ error: "Failed to cancel withdrawal" });
+  }
+});
+
+// Admin: Get all withdrawals
+app.get("/admin/withdrawals", requireAuth, requireAdmin, async (req, res) => {
+  try {
+    const { status } = req.query;
+
+    let query = supabaseAdmin
+      .from("withdrawals")
+      .select(`
+        *,
+        user:profiles!withdrawals_user_id_fkey(
+          id,
+          full_name,
+          email
+        ),
+        bank_account:bank_accounts(
+          bank_name,
+          account_number,
+          account_holder_name
+        )
+      `)
+      .order("created_at", { ascending: false });
+
+    if (status) {
+      query = query.eq("status", status);
+    }
+
+    const { data, error } = await query;
+
+    if (error) throw error;
+
+    res.json(data);
+  } catch (err) {
+    console.error("Admin get withdrawals error:", err);
+    res.status(500).json({ error: "Failed to get withdrawals" });
+  }
+});
+
+// Admin: Update withdrawal status
+app.patch("/admin/withdrawals/:id", requireAuth, requireAdmin, async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { status, admin_note, transfer_proof_url } = req.body;
+    const adminId = req.user.id;
+
+    const updateData = {
+      status,
+      admin_note,
+      updated_at: new Date().toISOString(),
+    };
+
+    if (status === "approved") {
+      updateData.approved_by = adminId;
+      updateData.approved_at = new Date().toISOString();
+    }
+
+    if (status === "completed" && transfer_proof_url) {
+      updateData.transfer_proof_url = transfer_proof_url;
+      updateData.completed_at = new Date().toISOString();
+    }
+
+    const { data, error } = await supabaseAdmin
+      .from("withdrawals")
+      .update(updateData)
+      .eq("id", id)
+      .select()
+      .single();
+
+    if (error) {
+      if (error.code === "PGRST116") {
+        return res.status(404).json({ error: "Withdrawal not found" });
+      }
+      throw error;
+    }
+
+    res.json(data);
+  } catch (err) {
+    console.error("Admin update withdrawal error:", err);
+    res.status(500).json({ error: "Failed to update withdrawal" });
+  }
+});
+
+// ============================================================
 // ROUTES: Company Bank Accounts (for transfer display)
 // ============================================================
 
