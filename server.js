@@ -1239,41 +1239,54 @@ app.get("/admin/withdrawals", requireAuth, requireAdmin, async (req, res) => {
   try {
     const { status } = req.query;
 
+    // Query withdrawals without joins (FK relationship missing)
     let query = supabaseAdmin
       .from("withdrawals")
-      .select(`
-        *,
-        user:profiles(
-          id,
-          full_name,
-          email
-        ),
-        bank_account:bank_accounts(
-          id,
-          bank,
-          account_number,
-          account_name
-        )
-      `)
+      .select("*")
       .order("created_at", { ascending: false });
 
     if (status) {
       query = query.eq("status", status);
     }
 
-    const { data, error } = await query;
+    const { data: withdrawals, error } = await query;
 
     if (error) {
       console.error("[Admin Withdrawals] Query error:", error);
       throw error;
     }
 
-    console.log(`[Admin Withdrawals] Found ${data?.length || 0} withdrawals`);
-    if (data && data.length > 0) {
-      console.log("[Admin Withdrawals] Sample:", data[0]);
-    }
+    console.log(`[Admin Withdrawals] Found ${withdrawals?.length || 0} withdrawals`);
 
-    res.json(data);
+    // Manual join: fetch related data separately
+    if (withdrawals && withdrawals.length > 0) {
+      const userIds = [...new Set(withdrawals.map(w => w.user_id))];
+      const bankIds = [...new Set(withdrawals.map(w => w.bank_account_id).filter(Boolean))];
+
+      // Fetch users
+      const { data: users } = await supabaseAdmin
+        .from("profiles")
+        .select("id, full_name, email")
+        .in("id", userIds);
+
+      // Fetch bank accounts
+      const { data: banks } = await supabaseAdmin
+        .from("bank_accounts")
+        .select("id, bank, account_number, account_name")
+        .in("id", bankIds);
+
+      // Combine data
+      const result = withdrawals.map(w => ({
+        ...w,
+        user: users?.find(u => u.id === w.user_id) || null,
+        bank_account: banks?.find(b => b.id === w.bank_account_id) || null
+      }));
+
+      console.log("[Admin Withdrawals] Sample with manual joins:", result[0]);
+      res.json(result);
+    } else {
+      res.json([]);
+    }
   } catch (err) {
     console.error("Admin get withdrawals error:", err);
     res.status(500).json({
