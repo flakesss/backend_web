@@ -1110,12 +1110,21 @@ app.post("/withdrawals", requireAuth, async (req, res) => {
       return res.status(400).json({ error: "Invalid bank account" });
     }
 
+    // Calculate admin fee (2.5% same as platform fee)
+    const ADMIN_FEE_RATE = 0.025; // 2.5%
+    const adminFee = Math.ceil(parseFloat(amount) * ADMIN_FEE_RATE);
+    const netAmount = parseFloat(amount) - adminFee;
+
+    console.log(`[Withdrawal] Amount: ${amount}, Fee: ${adminFee}, Net: ${netAmount}`);
+
     // Create withdrawal request
     const { data, error } = await req.authClient
       .from("withdrawals")
       .insert({
         user_id: userId,
-        amount: parseFloat(amount),
+        amount: parseFloat(amount),        // Total amount deducted from balance
+        admin_fee: adminFee,                // Admin fee (2.5%)
+        net_amount: netAmount,              // Amount user receives
         bank_account_id,
         status: "pending",
       })
