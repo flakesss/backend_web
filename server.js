@@ -1129,7 +1129,15 @@ app.get("/withdrawals", requireAuth, async (req, res) => {
 
     const { data, error } = await req.authClient
       .from("withdrawals")
-      .select("*")
+      .select(`
+        *,
+        bank_account:bank_accounts(
+          id,
+          bank,
+          account_number,
+          account_name
+        )
+      `)
       .eq("user_id", userId)
       .order("created_at", { ascending: false });
 
@@ -1200,6 +1208,12 @@ app.get("/admin/withdrawals", requireAuth, requireAdmin, async (req, res) => {
           id,
           full_name,
           email
+        ),
+        bank_account:bank_accounts(
+          id,
+          bank,
+          account_number,
+          account_name
         )
       `)
       .order("created_at", { ascending: false });
