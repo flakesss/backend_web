@@ -1211,7 +1211,15 @@ app.get("/orders/:id", requireAuth, async (req, res) => {
       .select(`
         *,
         payments (*),
-        seller:profiles!orders_seller_id_fkey (id, full_name, email)
+        seller:profiles!orders_seller_id_fkey (
+          id, 
+          full_name, 
+          email, 
+          phone,
+          instagram_url,
+          tiktok_url,
+          facebook_url
+        )
       `)
       .eq("id", id)
       .single();
@@ -1247,7 +1255,16 @@ app.get("/orders/number/:orderNumber", async (req, res) => {
         status,
         buyer_id,
         seller_id,
-        created_at
+        created_at,
+        seller:profiles!orders_seller_id_fkey (
+          id,
+          full_name,
+          email,
+          phone,
+          instagram_url,
+          tiktok_url,
+          facebook_url
+        )
       `)
       .eq("order_number", orderNumber)
       .single();
@@ -1259,7 +1276,7 @@ app.get("/orders/number/:orderNumber", async (req, res) => {
       throw error;
     }
 
-    // Return order info with buyer_id for confirmation
+    // Return order info with seller details
     res.json({
       order_id: data.id,
       order_number: data.order_number,
@@ -1269,6 +1286,7 @@ app.get("/orders/number/:orderNumber", async (req, res) => {
       status: data.status,
       buyer_id: data.buyer_id,
       seller_id: data.seller_id,
+      seller: data.seller, // Include seller profile info
     });
   } catch (err) {
     console.error("Get order by number error:", err);
