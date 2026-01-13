@@ -1015,10 +1015,20 @@ app.get("/withdrawals/balance", requireAuth, async (req, res) => {
 
     if (ordersError) throw ordersError;
 
+    console.log(`[Balance] User ${userId} - Found ${completedOrders?.length || 0} completed orders`);
+    if (completedOrders && completedOrders.length > 0) {
+      console.log('[Balance] Completed orders detail:', completedOrders.map(o => ({
+        product_price: o.product_price,
+        platform_fee: o.platform_fee
+      })));
+    }
+
     // Calculate total earnings (product price only, platform fee excluded)
     const totalEarnings = completedOrders.reduce((sum, order) => {
       return sum + parseFloat(order.product_price || 0);
     }, 0);
+
+    console.log(`[Balance] Total earnings calculated: ${totalEarnings}`);
 
     // Get total already withdrawn (approved + completed)
     const { data: withdrawals, error: withdrawalsError } = await req.authClient
