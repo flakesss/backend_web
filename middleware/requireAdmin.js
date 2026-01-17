@@ -45,8 +45,8 @@ async function requireAdmin(req, res, next) {
             });
         }
 
-        // Check if user is admin or super_admin
-        if (profile.role !== 'admin' && profile.role !== 'super_admin') {
+        // Check if user is admin
+        if (profile.role !== 'admin') {
             console.warn(`[Admin Check] Unauthorized access attempt by user: ${userId}`);
             return res.status(403).json({
                 error: 'Forbidden',
@@ -69,7 +69,9 @@ async function requireAdmin(req, res, next) {
 }
 
 /**
- * Helper function to check if user is admin (for use in other code)
+ * Helper function to check if a user is an admin
+ * @param {string} userId - User ID to check
+ * @returns {Promise<boolean>} - True if user is admin, false otherwise
  */
 async function isUserAdmin(userId) {
     try {
@@ -83,7 +85,7 @@ async function isUserAdmin(userId) {
             return false;
         }
 
-        return profile.role === 'admin' || profile.role === 'super_admin';
+        return profile.role === 'admin';
     } catch (err) {
         console.error('[Admin Check] Error checking admin status:', err);
         return false;
