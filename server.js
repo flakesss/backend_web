@@ -133,6 +133,7 @@ if (process.env.NODE_ENV !== 'test') {
 // ADMIN MIDDLEWARE
 // ============================================================
 const { requireAdmin } = require('./middleware/requireAdmin');
+const { requireSuperAdmin } = require('./middleware/requireSuperAdmin');
 
 // ============================================================
 // MIDDLEWARE: Authentication
@@ -182,16 +183,28 @@ app.get("/admin/check", requireAuth, async (req, res) => {
       .single();
 
     if (error || !profile) {
-      return res.json({ isAdmin: false });
+      return res.json({
+        isAdmin: false,
+        isSuperAdmin: false,
+        role: 'user'
+      });
     }
 
+    const isAdmin = profile.role === 'admin' || profile.role === 'super_admin';
+    const isSuperAdmin = profile.role === 'super_admin';
+
     res.json({
-      isAdmin: profile.role === 'admin',
+      isAdmin: isAdmin,
+      isSuperAdmin: isSuperAdmin,
       role: profile.role
     });
   } catch (err) {
     console.error('Admin check error:', err);
-    res.json({ isAdmin: false });
+    res.json({
+      isAdmin: false,
+      isSuperAdmin: false,
+      role: 'user'
+    });
   }
 });
 
@@ -1297,7 +1310,7 @@ app.get("/admin/withdrawals", requireAuth, requireAdmin, async (req, res) => {
 });
 
 // Admin: Update withdrawal status
-app.patch("/admin/withdrawals/:id", requireAuth, requireAdmin, async (req, res) => {
+app.patch("/admin/withdrawals/:id", requireAuth, requireSuperAdmin, async (req, res) => {
   try {
     const { id } = req.params;
     const { status, admin_note, transfer_proof_url } = req.body;
@@ -2113,7 +2126,7 @@ app.get("/admin/payment-proofs", requireAuth, requireAdmin, async (req, res) => 
 });
 
 // Approve or Reject payment proof (Admin)
-app.patch("/admin/payment-proofs/:id", requireAuth, requireAdmin, async (req, res) => {
+app.patch("/admin/payment-proofs/:id", requireAuth, requireSuperAdmin, async (req, res) => {
   const { id } = req.params;
   const { action, rejection_reason } = req.body; // action: 'approve' or 'reject'
 
@@ -2248,7 +2261,7 @@ app.get("/admin/cancellation-requests", requireAuth, requireAdmin, async (req, r
 });
 
 // Approve or Reject Cancellation Request (Admin)
-app.patch("/admin/cancellation-requests/:id", requireAuth, requireAdmin, async (req, res) => {
+app.patch("/admin/cancellation-requests/:id", requireAuth, requireSuperAdmin, async (req, res) => {
   const { id } = req.params;
   const { action, admin_notes } = req.body; // action: 'approve' or 'reject'
   const adminId = req.user.id;
@@ -2329,7 +2342,7 @@ app.patch("/admin/cancellation-requests/:id", requireAuth, requireAdmin, async (
 });
 
 // Mark order as delivered (triggers fund release to seller)
-app.patch("/admin/orders/:id/deliver", requireAuth, requireAdmin, async (req, res) => {
+app.patch("/admin/orders/:id/deliver", requireAuth, requireSuperAdmin, async (req, res) => {
   const { id } = req.params;
 
   try {
@@ -2384,7 +2397,7 @@ app.patch("/admin/orders/:id/deliver", requireAuth, requireAdmin, async (req, re
 });
 
 // Complete fund release (Admin confirms transfer to seller)
-app.patch("/admin/fund-releases/:id", requireAuth, requireAdmin, async (req, res) => {
+app.patch("/admin/fund-releases/:id", requireAuth, requireSuperAdmin, async (req, res) => {
   const { id } = req.params;
   const { transfer_proof, transfer_note } = req.body;
 
@@ -2950,7 +2963,7 @@ app.get("/notifications/devices", requireAuth, async (req, res) => {
 });
 
 // Admin: Broadcast notification to all users
-app.post("/admin/broadcast-notification", requireAuth, requireAdmin, async (req, res) => {
+app.post("/admin/broadcast-notification", requireAuth, requireSuperAdmin, async (req, res) => {
   const { title, message, url, image } = req.body;
 
   if (!title || !message) {
@@ -3143,7 +3156,7 @@ app.get("/legal/my-acceptances", requireAuth, async (req, res) => {
 });
 
 // Admin: Update legal document (create new version)
-app.post("/admin/legal/update", requireAuth, requireAdmin, async (req, res) => {
+app.post("/admin/legal/update", requireAuth, requireSuperAdmin, async (req, res) => {
   const { type, title, content, version } = req.body;
 
   if (!type || !content || !version) {
@@ -3642,7 +3655,7 @@ app.get("/admin/coupons", requireAuth, requireAdmin, async (req, res) => {
 });
 
 // Create New Coupon (Admin Only)
-app.post("/admin/coupons", requireAuth, requireAdmin, async (req, res) => {
+app.post("/admin/coupons", requireAuth, requireSuperAdmin, async (req, res) => {
   try {
     const {
       code,
@@ -3694,7 +3707,7 @@ app.post("/admin/coupons", requireAuth, requireAdmin, async (req, res) => {
 });
 
 // Update Coupon (Admin Only)
-app.patch("/admin/coupons/:id", requireAuth, requireAdmin, async (req, res) => {
+app.patch("/admin/coupons/:id", requireAuth, requireSuperAdmin, async (req, res) => {
   try {
     const { id } = req.params;
     const { quota, is_active, valid_until } = req.body;
@@ -3731,7 +3744,7 @@ app.patch("/admin/coupons/:id", requireAuth, requireAdmin, async (req, res) => {
 });
 
 // Delete Coupon (Admin Only)
-app.delete("/admin/coupons/:id", requireAuth, requireAdmin, async (req, res) => {
+app.delete("/admin/coupons/:id", requireAuth, requireSuperAdmin, async (req, res) => {
   try {
     const { id } = req.params;
 
