@@ -1,6 +1,7 @@
 const express = require("express");
 const cors = require("cors");
 const { createClient } = require("@supabase/supabase-js");
+const multer = require("multer");
 
 // Load environment variables from .env file
 require('dotenv').config();
@@ -3185,6 +3186,219 @@ app.post("/admin/legal/update", requireAuth, requireAdmin, async (req, res) => {
   } catch (err) {
     console.error('[UpdateLegal] Error:', err);
     res.status(500).json({ error: 'Failed to update legal document' });
+  }
+});
+
+// ============================================================
+// MULTER CONFIGURATION (Order Evidence Photos)
+// ============================================================
+const upload = multer({
+  storage: multer.memoryStorage(), // Store in memory for Supabase upload
+  limits: {
+    fileSize: 5 * 1024 * 1024, // 5MB
+    files: 1 // One file at a time
+  },
+  fileFilter: (req, file, cb) => {
+    // Only allow images
+    const allowedMimes = ['image/jpeg', 'image/png', 'image/webp'];
+    if (allowedMimes.includes(file.mimetype)) {
+      cb(null, true);
+    } else {
+      cb(new Error('Invalid file type. Only JPEG, PNG, WebP allowed.'));
+    }
+  }
+});
+
+// ============================================================
+// ORDER EVIDENCE ENDPOINTS
+// ============================================================
+
+// Upload Evidence Photo (Seller)
+app.post('/order-evidences/upload', requireAuth, upload.single('file'), async (req, res) => {
+  try {
+    // 1. Validate request
+    if (!req.file) {
+      return res.status(400).json({ success: false, error: 'No file uploaded' });
+    }
+
+    const { order_id, upload_order = 0 } = req.body;
+
+    if (!order_id) {
+      return res.status(400).json({ success: false, error: 'order_id is required' });
+    }
+
+    // 2. Verify user is seller of this order
+    const { data: order, error: orderError } = await supabaseAdmin
+      .from('orders')
+      .select('id, seller_id')
+      .eq('id', order_id)
+      .single();
+
+    if (orderError || !order) {
+      return res.status(404).json({ success: false, error: 'Order not found' });
+    }
+
+    if (order.seller_id !== req.user.id) {
+      return res.status(403).json({
+        success: false,
+        error: 'Not authorized. Only seller can upload evidence.'
+      });
+    }
+
+    // 3. Check photo count limit (max 5 per order)
+    const { count } = await supabaseAdmin
+      .from('order_evidences')
+      .select('id', { count: 'exact', head: true })
+      .eq('order_id', order_id)
+      .eq('is_deleted', false);
+
+    if (count >= 5) {
+      return res.status(400).json({ success: false, error: 'Maximum 5 photos per order' });
+    }
+
+    // 4. Generate unique filename
+    const fileExt = req.file.originalname.split('.').pop();
+    const fileName = `${order_id}/${Date.now()}_${Math.random().toString(36).substring(7)}.${fileExt}`;
+
+    // 5. Upload to Supabase Storage
+    const { data: uploadData, error: uploadError } = await supabaseAdmin.storage
+      .from('order-evidences')
+      .upload(fileName, req.file.buffer, {
+        contentType: req.file.mimetype,
+        upsert: false
+      });
+
+    if (uploadError) {
+      console.error('Storage upload error:', uploadError);
+      return res.status(500).json({ success: false, error: 'Failed to upload file' });
+    }
+
+    // 6. Get public URL
+    const { data: urlData } = supabaseAdmin.storage
+      .from('order-evidences')
+      .getPublicUrl(fileName);
+
+    // 7. Save to database
+    const { data: evidence, error: dbError } = await supabaseAdmin
+      .from('order_evidences')
+      .insert({
+        order_id: order_id,
+        image_url: urlData.publicUrl,
+        image_name: req.file.originalname,
+        file_size: req.file.size,
+        mime_type: req.file.mimetype,
+        uploaded_by: req.user.id,
+        upload_order: parseInt(upload_order)
+      })
+      .select()
+      .single();
+
+    if (dbError) {
+      console.error('Database insert error:', dbError);
+      // Try to delete from storage
+      await supabaseAdmin.storage.from('order-evidences').remove([fileName]);
+      return res.status(500).json({ success: false, error: 'Failed to save evidence record' });
+    }
+
+    // 8. Success response
+    res.status(201).json({ success: true, data: evidence });
+
+  } catch (err) {
+    console.error('Upload evidence error:', err);
+    res.status(500).json({
+      success: false,
+      error: err.message || 'Internal server error'
+    });
+  }
+});
+
+// Get Evidence Photos for Order (Buyer/Public)
+app.get('/order-evidences/:orderId', async (req, res) => {
+  try {
+    const { orderId } = req.params;
+
+    // Get all active (not deleted) evidences for this order
+    const { data: evidences, error } = await supabaseAdmin
+      .from('order_evidences')
+      .select('*')
+      .eq('order_id', orderId)
+      .eq('is_deleted', false)
+      .order('upload_order', { ascending: true })
+      .order('created_at', { ascending: true });
+
+    if (error) {
+      console.error('Get evidences error:', error);
+      return res.status(500).json({ success: false, error: 'Failed to fetch evidences' });
+    }
+
+    res.json({
+      success: true,
+      data: evidences || [],
+      count: evidences?.length || 0
+    });
+
+  } catch (err) {
+    console.error('Get evidences error:', err);
+    res.status(500).json({ success: false, error: 'Internal server error' });
+  }
+});
+
+// Delete Evidence (Soft Delete) - Seller or Admin
+app.delete('/order-evidences/:id', requireAuth, async (req, res) => {
+  try {
+    const { id } = req.params;
+
+    // 1. Get evidence with order info
+    const { data: evidence, error: fetchError } = await supabaseAdmin
+      .from('order_evidences')
+      .select(`
+        *,
+        orders (seller_id)
+      `)
+      .eq('id', id)
+      .single();
+
+    if (fetchError || !evidence) {
+      return res.status(404).json({ success: false, error: 'Evidence not found' });
+    }
+
+    // 2. Check authorization (seller or admin)
+    const { data: userProfile } = await supabaseAdmin
+      .from('profiles')
+      .select('role')
+      .eq('id', req.user.id)
+      .single();
+
+    const isAdmin = userProfile?.role === 'admin';
+    const isSeller = evidence.orders.seller_id === req.user.id;
+
+    if (!isAdmin && !isSeller) {
+      return res.status(403).json({
+        success: false,
+        error: 'Not authorized to delete this evidence'
+      });
+    }
+
+    // 3. Soft delete
+    const { error: deleteError } = await supabaseAdmin
+      .from('order_evidences')
+      .update({
+        is_deleted: true,
+        deleted_at: new Date().toISOString(),
+        deleted_by: req.user.id
+      })
+      .eq('id', id);
+
+    if (deleteError) {
+      console.error('Delete evidence error:', deleteError);
+      return res.status(500).json({ success: false, error: 'Failed to delete evidence' });
+    }
+
+    res.json({ success: true, message: 'Evidence deleted successfully' });
+
+  } catch (err) {
+    console.error('Delete evidence error:', err);
+    res.status(500).json({ success: false, error: 'Internal server error' });
   }
 });
 
