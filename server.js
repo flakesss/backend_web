@@ -3402,370 +3402,6 @@ app.delete('/order-evidences/:id', requireAuth, async (req, res) => {
     }
 });
 
-// ============================================================================
-// SHIPPING & BITESHIP API INTEGRATION
-// ============================================================================
-
-const BITESHIP_API_KEY = process.env.BITESHIP_API_KEY;
-const BITESHIP_BASE_URL = process.env.BITESHIP_BASE_URL || 'https://api.biteship.com/v1';
-
-// Helper: Call Biteship API
-async function callBiteshipAPI(endpoint, method = 'GET', body = null) {
-    const url = `${BITESHIP_BASE_URL}${endpoint}`;
-
-    const options = {
-        method,
-        headers: {
-            'Authorization': BITESHIP_API_KEY,
-            'Content-Type': 'application/json'
-        }
-    };
-
-    if (body && method !== 'GET') {
-        options.body = JSON.stringify(body);
-    }
-
-    const response = await fetch(url, options);
-    const data = await response.json();
-
-    if (!response.ok) {
-        throw new Error(data.message || `Biteship API error: ${response.status}`);
-    }
-
-    return data;
-}
-
-
-
-
-// ============================================================================
-// BUYER SHIPPING ADDRESSES CRUD
-// ============================================================================
-
-// Get all addresses for current user
-app.get('/shipping-addresses', requireAuth, async (req, res) => {
-    try {
-        const userId = req.userId;
-
-        const { data, error } = await supabaseAdmin
-            .from('shipping_addresses')
-            .select('*')
-            .eq('user_id', userId)
-            .order('is_default', { ascending: false })
-            .order('created_at', { ascending: false });
-
-        if (error) {
-            console.error('Get addresses error:', error);
-            return res.status(500).json({ success: false, error: 'Failed to fetch addresses' });
-        }
-
-        res.json({ success: true, data: data || [] });
-    } catch (err) {
-        console.error('Get addresses error:', err);
-        res.status(500).json({ success: false, error: err.message });
-    }
-});
-
-// Create new address
-app.post('/shipping-addresses', requireAuth, async (req, res) => {
-    try {
-        const userId = req.userId;
-        const {
-            recipient_name,
-            phone_number,
-            full_address,
-            city,
-            province,
-            postal_code,
-            address_label,
-            notes
-        } = req.body;
-
-        // Validation
-        if (!recipient_name || !phone_number || !full_address || !city || !province || !postal_code) {
-            return res.status(400).json({
-                success: false,
-                error: 'Missing required fields'
-            });
-        }
-
-        if (!/^\d{5}$/.test(postal_code)) {
-            return res.status(400).json({
-                success: false,
-                error: 'Postal code must be 5 digits'
-            });
-        }
-
-        // Get username
-        const { data: profile } = await supabaseAdmin
-            .from('profiles')
-            .select('username')
-            .eq('id', userId)
-            .single();
-
-        const { data, error } = await supabaseAdmin
-            .from('shipping_addresses')
-            .insert({
-                user_id: userId,
-                username: profile?.username,
-                recipient_name,
-                phone_number,
-                full_address,
-                city,
-                province,
-                postal_code,
-                address_label: address_label || 'Home',
-                notes
-            })
-            .select()
-            .single();
-
-        if (error) {
-            console.error('Create address error:', error);
-            return res.status(500).json({ success: false, error: 'Failed to create address' });
-        }
-
-        res.status(201).json({ success: true, data });
-    } catch (err) {
-        console.error('Create address error:', err);
-        res.status(500).json({ success: false, error: err.message });
-    }
-});
-
-// Update address
-app.put('/shipping-addresses/:id', requireAuth, async (req, res) => {
-    try {
-        const { id } = req.params;
-        const userId = req.userId;
-        const {
-            recipient_name,
-            phone_number,
-            full_address,
-            city,
-            province,
-            postal_code,
-            address_label,
-            notes
-        } = req.body;
-
-        // Validation
-        if (!recipient_name || !phone_number || !full_address || !city || !province || !postal_code) {
-            return res.status(400).json({
-                success: false,
-                error: 'Missing required fields'
-            });
-        }
-
-        if (!/^\d{5}$/.test(postal_code)) {
-            return res.status(400).json({
-                success: false,
-                error: 'Postal code must be 5 digits'
-            });
-        }
-
-        const { data, error } = await supabaseAdmin
-            .from('shipping_addresses')
-            .update({
-                recipient_name,
-                phone_number,
-                full_address,
-                city,
-                province,
-                postal_code,
-                address_label,
-                notes
-            })
-            .eq('id', id)
-            .eq('user_id', userId)
-            .select()
-            .single();
-
-        if (error) {
-            console.error('Update address error:', error);
-            return res.status(500).json({ success: false, error: 'Failed to update address' });
-        }
-
-        res.json({ success: true, data });
-    } catch (err) {
-        console.error('Update address error:', err);
-        res.status(500).json({ success: false, error: err.message });
-    }
-});
-
-// Delete address
-app.delete('/shipping-addresses/:id', requireAuth, async (req, res) => {
-    try {
-        const { id } = req.params;
-        const userId = req.userId;
-
-        const { error } = await supabaseAdmin
-            .from('shipping_addresses')
-            .delete()
-            .eq('id', id)
-            .eq('user_id', userId);
-
-        if (error) {
-            console.error('Delete address error:', error);
-            return res.status(500).json({ success: false, error: 'Failed to delete address' });
-        }
-
-        res.json({ success: true, message: 'Address deleted' });
-    } catch (err) {
-        console.error('Delete address error:', err);
-        res.status(500).json({ success: false, error: err.message });
-    }
-});
-
-// Set default address
-app.put('/shipping-addresses/:id/set-default', requireAuth, async (req, res) => {
-    try {
-        const { id } = req.params;
-        const userId = req.userId;
-
-        // Unset all defaults first (trigger will handle this, but explicit is safer)
-        await supabaseAdmin
-            .from('shipping_addresses')
-            .update({ is_default: false })
-            .eq('user_id', userId);
-
-        // Set this as default
-        const { data, error } = await supabaseAdmin
-            .from('shipping_addresses')
-            .update({ is_default: true })
-            .eq('id', id)
-            .eq('user_id', userId)
-            .select()
-            .single();
-
-        if (error) {
-            console.error('Set default error:', error);
-            return res.status(500).json({ success: false, error: 'Failed to set default' });
-        }
-
-        res.json({ success: true, data });
-    } catch (err) {
-        console.error('Set default error:', err);
-        res.status(500).json({ success: false, error: err.message });
-    }
-});
-
-// Calculate Shipping Rates
-app.post('/shipping/calculate-rates', requireAuth, async (req, res) => {
-    try {
-        const {
-            destination_postal_code,
-            destination_latitude,
-            destination_longitude,
-            destination_city,
-            destination_province,
-            item_weight,
-            item_value,
-            item_length,
-            item_width,
-            item_height,
-            couriers
-        } = req.body;
-
-        const { data: sellerAddress, error: addressError } = await supabaseAdmin
-            .from('shipping_addresses')
-            .select('*')
-            .eq('user_id', req.userId)
-            .eq('is_default', true)
-            .single();
-
-        if (addressError || !sellerAddress) {
-            return res.status(400).json({
-                success: false,
-                error: 'Seller origin address not set. Please add your default address first.'
-            });
-        }
-
-        if (!destination_postal_code && (!destination_latitude || !destination_longitude)) {
-            return res.status(400).json({
-                success: false,
-                error: 'Either destination_postal_code OR destination coordinates required'
-            });
-        }
-
-        if (!item_weight) {
-            return res.status(400).json({
-                success: false,
-                error: 'item_weight is required (in grams)'
-            });
-        }
-
-        const biteshipRequest = {
-            origin_postal_code: sellerAddress.postal_code,
-            destination_postal_code: destination_postal_code || undefined,
-            destination_latitude: destination_latitude || undefined,
-            destination_longitude: destination_longitude || undefined,
-            couriers: couriers || 'jne,jnt,sicepat,pos,anteraja',
-            items: [{
-                name: 'Product',
-                value: item_value || 100000,
-                weight: parseInt(item_weight),
-                length: item_length || undefined,
-                width: item_width || undefined,
-                height: item_height || undefined,
-                quantity: 1
-            }]
-        };
-
-        if (sellerAddress.coordinates) {
-            biteshipRequest.origin_latitude = sellerAddress.coordinates.lat;
-            biteshipRequest.origin_longitude = sellerAddress.coordinates.lng;
-        }
-
-        const biteshipResponse = await callBiteshipAPI('/rates/couriers', 'POST', biteshipRequest);
-
-        const formattedRates = biteshipResponse.pricing.map(rate => ({
-            courier_code: rate.courier_code,
-            courier_name: rate.courier_name,
-            courier_service_code: rate.courier_service_code,
-            courier_service_name: rate.courier_service_name,
-            description: rate.description,
-            shipping_cost: rate.price,
-            estimated_days: rate.duration,
-            company: rate.company,
-            type: rate.type
-        }));
-
-        res.json({
-            success: true,
-            origin: {
-                city: sellerAddress.city,
-                province: sellerAddress.province,
-                postal_code: sellerAddress.postal_code
-            },
-            destination: {
-                city: destination_city,
-                province: destination_province,
-                postal_code: destination_postal_code
-            },
-            rates: formattedRates
-        });
-
-    } catch (err) {
-        console.error('Calculate shipping rates error:', err);
-
-        if (err.message.includes('Biteship')) {
-            return res.status(502).json({
-                success: false,
-                error: 'Shipping service error: ' + err.message
-            });
-        }
-
-        res.status(500).json({
-            success: false,
-            error: err.message || 'Failed to calculate shipping rates'
-        });
-    }
-});
-
-// ============================================================================
-// END SHIPPING ENDPOINTS
-// ============================================================================
-
 // ============================================================
 // Start Server
 // ============================================================
@@ -4369,6 +4005,164 @@ app.get("/admin/coupons/:id/stats", requireAuth, requireAdmin, async (req, res) 
     } catch (err) {
         console.error('[Coupon Stats] Error:', err);
         res.status(500).json({ error: "Internal server error" });
+    }
+});
+
+// ============================================================================
+// SHIPPING ADDRESSES ENDPOINTS
+// ============================================================================
+
+// Get all addresses for logged-in user
+app.get('/shipping-addresses', verifyUser, async (req, res) => {
+    try {
+        const { data: addresses, error } = await supabaseAdmin
+            .from('shipping_addresses')
+            .select('*')
+            .eq('user_id', req.user.id)
+            .order('is_default', { ascending: false })
+            .order('created_at', { ascending: false });
+
+        if (error) {
+            console.error('Get addresses error:', error);
+            return res.status(500).json({ success: false, error: 'Failed to fetch addresses' });
+        }
+
+        res.json({ success: true, data: addresses || [] });
+    } catch (err) {
+        console.error('Get addresses error:', err);
+        res.status(500).json({ success: false, error: err.message });
+    }
+});
+
+// Create new shipping address
+app.post('/shipping-addresses', verifyUser, async (req, res) => {
+    try {
+        const {
+            recipient_name,
+            phone_number,
+            full_address,
+            city,
+            province,
+            postal_code,
+            address_label,
+            notes,
+            is_default = false
+        } = req.body;
+
+        // Validation
+        if (!recipient_name || !phone_number || !full_address || !city || !province || !postal_code) {
+            return res.status(400).json({
+                success: false,
+                error: 'Nama, telepon, alamat, kota, provinsi, dan kode pos wajib diisi'
+            });
+        }
+
+        // Get username
+        const { data: profile } = await supabaseAdmin
+            .from('profiles')
+            .select('username')
+            .eq('id', req.user.id)
+            .single();
+
+        // Insert address
+        const { data: address, error } = await supabaseAdmin
+            .from('shipping_addresses')
+            .insert({
+                user_id: req.user.id,
+                username: profile?.username,
+                recipient_name,
+                phone_number,
+                full_address,
+                city,
+                province,
+                postal_code,
+                address_label,
+                notes,
+                is_default
+            })
+            .select()
+            .single();
+
+        if (error) {
+            console.error('Insert address error:', error);
+            return res.status(500).json({ success: false, error: 'Gagal menyimpan alamat' });
+        }
+
+        res.status(201).json({ success: true, data: address });
+    } catch (err) {
+        console.error('Create address error:', err);
+        res.status(500).json({ success: false, error: err.message });
+    }
+});
+
+// Update shipping address
+app.put('/shipping-addresses/:id', verifyUser, async (req, res) => {
+    try {
+        const { id } = req.params;
+        const updates = req.body;
+
+        // Check ownership
+        const { data: existing } = await supabaseAdmin
+            .from('shipping_addresses')
+            .select('user_id')
+            .eq('id', id)
+            .single();
+
+        if (!existing || existing.user_id !== req.user.id) {
+            return res.status(404).json({ success: false, error: 'Alamat tidak ditemukan' });
+        }
+
+        // Update
+        const { data: address, error } = await supabaseAdmin
+            .from('shipping_addresses')
+            .update(updates)
+            .eq('id', id)
+            .select()
+            .single();
+
+        if (error) {
+            console.error('Update address error:', error);
+            return res.status(500).json({ success: false, error: 'Gagal update alamat' });
+        }
+
+        res.json({ success: true, data: address });
+    } catch (err) {
+        console.error('Update address error:', err);
+        res.status(500).json({ success: false, error: err.message });
+    }
+});
+
+// Delete shipping address
+app.delete('/shipping-addresses/:id', verifyUser, async (req, res) => {
+    try {
+        const { id } = req.params;
+
+        // Check ownership
+        const { data: existing } = await supabaseAdmin
+            .from('shipping_addresses')
+            .select('user_id')
+            .eq('id', id)
+            .single();
+
+        if (!existing || existing.user_id !== req.user.id) {
+            return res.status(404).json({ success: false, error: 'Alamat tidak ditemukan' });
+        }
+
+        // Delete
+        const { error } = await supabaseAdmin
+            .from('shipping_addresses')
+            .delete()
+            .eq('id', id);
+
+        if (error) {
+            console.error('Delete address error:', error);
+            return res.status(500).json({ success: false, error: 'Gagal hapus alamat' });
+        }
+
+        res.json({ success: true, message: 'Alamat berhasil dihapus' });
+    } catch (err) {
+        console.error('Delete address error:', err);
+        res.status(500).json({ success: false, error: err.message });
     }
 });
 
