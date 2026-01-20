@@ -3436,7 +3436,7 @@ async function callBiteshipAPI(endpoint, method = 'GET', body = null) {
 }
 
 // Get Seller Address
-app.get('/seller/address', authenticateUser, async (req, res) => {
+app.get('/seller/address', requireAuth, async (req, res) => {
   try {
     const userId = req.userId;
 
@@ -3466,7 +3466,7 @@ app.get('/seller/address', authenticateUser, async (req, res) => {
 });
 
 // Update Seller Address
-app.post('/seller/address', authenticateUser, async (req, res) => {
+app.post('/seller/address', requireAuth, async (req, res) => {
   try {
     const userId = req.userId;
     const {
@@ -3529,7 +3529,7 @@ app.post('/seller/address', authenticateUser, async (req, res) => {
 });
 
 // Calculate Shipping Rates
-app.post('/shipping/calculate-rates', authenticateUser, async (req, res) => {
+app.post('/shipping/calculate-rates', requireAuth, async (req, res) => {
   try {
     const {
       destination_postal_code,
