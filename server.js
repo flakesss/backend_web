@@ -4166,3 +4166,63 @@ app.delete('/shipping-addresses/:id', requireAuth, async (req, res) => {
     }
 });
 
+// Calculate shipping rates using Biteship API
+app.post('/shipping/calculate-rates', requireAuth, async (req, res) => {
+    try {
+        const { origin_postal_code, destination_postal_code, couriers = 'jne,jnt,sicepat,anteraja', items } = req.body;
+
+        if (!origin_postal_code || !destination_postal_code) {
+            return res.status(400).json({ success: false, error: 'Postal code wajib diisi' });
+        }
+
+        if (!items || items.length === 0) {
+            return res.status(400).json({ success: false, error: 'Items wajib diisi' });
+        }
+
+        const biteshipResponse = await fetch('https://api.biteship.com/v1/rates/couriers', {
+            method: 'POST',
+            headers: {
+                'Authorization': process.env.BITESHIP_API_KEY,
+                'Content-Type': 'application/json'
+            },
+            body: JSON.stringify({
+                origin_postal_code: parseInt(origin_postal_code),
+                destination_postal_code: parseInt(destination_postal_code),
+                couriers,
+                items: items.map(item => ({
+                    name: item.name || 'Product',
+                    value: parseInt(item.value) || 0,
+                    weight: parseInt(item.weight) || 1000,
+                    quantity: parseInt(item.quantity) || 1,
+                    length: parseInt(item.length) || 10,
+                    width: parseInt(item.width) || 10,
+                    height: parseInt(item.height) || 10
+                }))
+            })
+        });
+
+        const biteshipData = await biteshipResponse.json();
+
+        if (!biteshipResponse.ok) {
+            console.error('Biteship API error:', biteshipData);
+            return res.status(500).json({ success: false, error: biteshipData.error || 'Gagal mendapatkan tarif' });
+        }
+
+        const rates = (biteshipData.pricing || []).map(rate => ({
+            id: `${rate.courier_code}-${rate.courier_service_code}`,
+            courier_code: rate.courier_code,
+            courier_name: rate.courier_name,
+            service_name: rate.courier_service_name,
+            service_code: rate.courier_service_code,
+            price: rate.price,
+            duration: rate.duration,
+            company: rate.company
+        }));
+
+        res.json({ success: true, rates });
+    } catch (err) {
+        console.error('Calculate rates error:', err);
+        res.status(500).json({ success: false, error: err.message });
+    }
+});
+
