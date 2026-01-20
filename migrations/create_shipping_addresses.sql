@@ -63,15 +63,6 @@ ADD COLUMN shipping_snapshot JSONB;
 COMMENT ON COLUMN orders.shipping_snapshot IS 'Immutable snapshot of shipping data at transaction time including buyer address, seller address, courier details, and tracking info';
 
 -- ============================================================================
--- 3. UPDATE PROFILES TABLE (SELLER ADDRESS)
--- ============================================================================
-
-ALTER TABLE profiles
-ADD COLUMN seller_address JSONB;
-
-COMMENT ON COLUMN profiles.seller_address IS 'Seller shipping origin address for calculating shipping costs';
-
--- ============================================================================
 -- 4. CREATE INDEXES
 -- ============================================================================
 
@@ -261,5 +252,4 @@ WHERE event_object_table = 'shipping_addresses';
 -- DROP FUNCTION IF EXISTS ensure_one_default_address();
 -- DROP FUNCTION IF EXISTS update_shipping_addresses_timestamp();
 -- ALTER TABLE orders DROP COLUMN IF EXISTS shipping_snapshot;
--- ALTER TABLE profiles DROP COLUMN IF EXISTS seller_address;
 -- DROP TABLE IF EXISTS shipping_addresses;

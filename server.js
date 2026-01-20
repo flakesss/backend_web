@@ -4013,7 +4013,7 @@ app.get("/admin/coupons/:id/stats", requireAuth, requireAdmin, async (req, res) 
 // ============================================================================
 
 // Get all addresses for logged-in user
-app.get('/shipping-addresses', verifyUser, async (req, res) => {
+app.get('/shipping-addresses', requireAuth, async (req, res) => {
     try {
         const { data: addresses, error } = await supabaseAdmin
             .from('shipping_addresses')
@@ -4035,7 +4035,7 @@ app.get('/shipping-addresses', verifyUser, async (req, res) => {
 });
 
 // Create new shipping address
-app.post('/shipping-addresses', verifyUser, async (req, res) => {
+app.post('/shipping-addresses', requireAuth, async (req, res) => {
     try {
         const {
             recipient_name,
@@ -4096,7 +4096,7 @@ app.post('/shipping-addresses', verifyUser, async (req, res) => {
 });
 
 // Update shipping address
-app.put('/shipping-addresses/:id', verifyUser, async (req, res) => {
+app.put('/shipping-addresses/:id', requireAuth, async (req, res) => {
     try {
         const { id } = req.params;
         const updates = req.body;
@@ -4133,7 +4133,7 @@ app.put('/shipping-addresses/:id', verifyUser, async (req, res) => {
 });
 
 // Delete shipping address
-app.delete('/shipping-addresses/:id', verifyUser, async (req, res) => {
+app.delete('/shipping-addresses/:id', requireAuth, async (req, res) => {
     try {
         const { id } = req.params;
 
