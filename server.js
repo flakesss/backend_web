@@ -1421,7 +1421,7 @@ app.put("/profile/social-media", requireAuth, async (req, res) => {
 
 // Create new order (Seller)
 app.post("/orders", requireAuth, async (req, res) => {
-    const { title, description, product_price, platform_fee, total_amount, bank_account_id } = req.body;
+    const { title, description, product_price, platform_fee, total_amount, bank_account_id, seller_postal_code, seller_address_id } = req.body;
 
     if (!title) {
         return res.status(400).json({ error: "Title is required" });
@@ -1498,6 +1498,8 @@ app.post("/orders", requireAuth, async (req, res) => {
                 total_amount: finalTotalAmount,
                 status: "awaiting_payment",
                 bank_account_id: bank_account_id || null,
+                seller_postal_code: seller_postal_code || null,
+                seller_address_id: seller_address_id || null,
             })
             .select()
             .single();
