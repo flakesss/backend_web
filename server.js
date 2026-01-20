@@ -3528,6 +3528,217 @@ app.post('/seller/address', requireAuth, async (req, res) => {
   }
 });
 
+// ============================================================================
+// BUYER SHIPPING ADDRESSES CRUD
+// ============================================================================
+
+// Get all addresses for current user
+app.get('/shipping-addresses', requireAuth, async (req, res) => {
+  try {
+    const userId = req.userId;
+
+    const { data, error } = await supabaseAdmin
+      .from('shipping_addresses')
+      .select('*')
+      .eq('user_id', userId)
+      .order('is_default', { ascending: false })
+      .order('created_at', { ascending: false });
+
+    if (error) {
+      console.error('Get addresses error:', error);
+      return res.status(500).json({ success: false, error: 'Failed to fetch addresses' });
+    }
+
+    res.json({ success: true, data: data || [] });
+  } catch (err) {
+    console.error('Get addresses error:', err);
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+// Create new address
+app.post('/shipping-addresses', requireAuth, async (req, res) => {
+  try {
+    const userId = req.userId;
+    const {
+      recipient_name,
+      phone_number,
+      full_address,
+      city,
+      province,
+      postal_code,
+      address_label,
+      notes
+    } = req.body;
+
+    // Validation
+    if (!recipient_name || !phone_number || !full_address || !city || !province || !postal_code) {
+      return res.status(400).json({
+        success: false,
+        error: 'Missing required fields'
+      });
+    }
+
+    if (!/^\d{5}$/.test(postal_code)) {
+      return res.status(400).json({
+        success: false,
+        error: 'Postal code must be 5 digits'
+      });
+    }
+
+    // Get username
+    const { data: profile } = await supabaseAdmin
+      .from('profiles')
+      .select('username')
+      .eq('id', userId)
+      .single();
+
+    const { data, error } = await supabaseAdmin
+      .from('shipping_addresses')
+      .insert({
+        user_id: userId,
+        username: profile?.username,
+        recipient_name,
+        phone_number,
+        full_address,
+        city,
+        province,
+        postal_code,
+        address_label: address_label || 'Home',
+        notes
+      })
+      .select()
+      .single();
+
+    if (error) {
+      console.error('Create address error:', error);
+      return res.status(500).json({ success: false, error: 'Failed to create address' });
+    }
+
+    res.status(201).json({ success: true, data });
+  } catch (err) {
+    console.error('Create address error:', err);
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+// Update address
+app.put('/shipping-addresses/:id', requireAuth, async (req, res) => {
+  try {
+    const { id } = req.params;
+    const userId = req.userId;
+    const {
+      recipient_name,
+      phone_number,
+      full_address,
+      city,
+      province,
+      postal_code,
+      address_label,
+      notes
+    } = req.body;
+
+    // Validation
+    if (!recipient_name || !phone_number || !full_address || !city || !province || !postal_code) {
+      return res.status(400).json({
+        success: false,
+        error: 'Missing required fields'
+      });
+    }
+
+    if (!/^\d{5}$/.test(postal_code)) {
+      return res.status(400).json({
+        success: false,
+        error: 'Postal code must be 5 digits'
+      });
+    }
+
+    const { data, error } = await supabaseAdmin
+      .from('shipping_addresses')
+      .update({
+        recipient_name,
+        phone_number,
+        full_address,
+        city,
+        province,
+        postal_code,
+        address_label,
+        notes
+      })
+      .eq('id', id)
+      .eq('user_id', userId)
+      .select()
+      .single();
+
+    if (error) {
+      console.error('Update address error:', error);
+      return res.status(500).json({ success: false, error: 'Failed to update address' });
+    }
+
+    res.json({ success: true, data });
+  } catch (err) {
+    console.error('Update address error:', err);
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+// Delete address
+app.delete('/shipping-addresses/:id', requireAuth, async (req, res) => {
+  try {
+    const { id } = req.params;
+    const userId = req.userId;
+
+    const { error } = await supabaseAdmin
+      .from('shipping_addresses')
+      .delete()
+      .eq('id', id)
+      .eq('user_id', userId);
+
+    if (error) {
+      console.error('Delete address error:', error);
+      return res.status(500).json({ success: false, error: 'Failed to delete address' });
+    }
+
+    res.json({ success: true, message: 'Address deleted' });
+  } catch (err) {
+    console.error('Delete address error:', err);
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+// Set default address
+app.put('/shipping-addresses/:id/set-default', requireAuth, async (req, res) => {
+  try {
+    const { id } = req.params;
+    const userId = req.userId;
+
+    // Unset all defaults first (trigger will handle this, but explicit is safer)
+    await supabaseAdmin
+      .from('shipping_addresses')
+      .update({ is_default: false })
+      .eq('user_id', userId);
+
+    // Set this as default
+    const { data, error } = await supabaseAdmin
+      .from('shipping_addresses')
+      .update({ is_default: true })
+      .eq('id', id)
+      .eq('user_id', userId)
+      .select()
+      .single();
+
+    if (error) {
+      console.error('Set default error:', error);
+      return res.status(500).json({ success: false, error: 'Failed to set default' });
+    }
+
+    res.json({ success: true, data });
+  } catch (err) {
+    console.error('Set default error:', err);
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
 // Calculate Shipping Rates
 app.post('/shipping/calculate-rates', requireAuth, async (req, res) => {
   try {
