@@ -3435,98 +3435,8 @@ async function callBiteshipAPI(endpoint, method = 'GET', body = null) {
     return data;
 }
 
-// Get Seller Address
-app.get('/seller/address', requireAuth, async (req, res) => {
-    try {
-        const userId = req.userId;
 
-        const { data: profile, error } = await supabaseAdmin
-            .from('profiles')
-            .select('seller_address, full_name, username')
-            .eq('id', userId)
-            .single();
 
-        if (error) {
-            return res.status(500).json({ success: false, error: 'Failed to fetch profile' });
-        }
-
-        res.json({
-            success: true,
-            data: {
-                seller_address: profile.seller_address,
-                full_name: profile.full_name,
-                username: profile.username
-            }
-        });
-
-    } catch (err) {
-        console.error('Get seller address error:', err);
-        res.status(500).json({ success: false, error: err.message });
-    }
-});
-
-// Update Seller Address
-app.post('/seller/address', requireAuth, async (req, res) => {
-    try {
-        const userId = req.userId;
-        const {
-            sender_name,
-            phone_number,
-            full_address,
-            city,
-            province,
-            postal_code,
-            latitude,
-            longitude
-        } = req.body;
-
-        if (!sender_name || !phone_number || !full_address || !city || !province || !postal_code) {
-            return res.status(400).json({
-                success: false,
-                error: 'Missing required fields'
-            });
-        }
-
-        if (!/^\d{5}$/.test(postal_code)) {
-            return res.status(400).json({
-                success: false,
-                error: 'Postal code must be 5 digits'
-            });
-        }
-
-        const sellerAddress = {
-            sender_name,
-            phone_number,
-            full_address,
-            city,
-            province,
-            postal_code,
-            coordinates: (latitude && longitude) ? { lat: latitude, lng: longitude } : null
-        };
-
-        const { data, error } = await supabaseAdmin
-            .from('profiles')
-            .update({ seller_address: sellerAddress })
-            .eq('id', userId)
-            .select('seller_address')
-            .single();
-
-        if (error) {
-            console.error('Update seller address error:', error);
-            return res.status(500).json({ success: false, error: 'Failed to update address' });
-        }
-
-        res.json({
-            success: true,
-            message: 'Seller address updated successfully',
-            data: data.seller_address
-        });
-
-    } catch (err) {
-        console.error('Update seller address error:', err);
-        res.status(500).json({ success: false, error: err.message });
-    }
-});
 
 // ============================================================================
 // BUYER SHIPPING ADDRESSES CRUD
@@ -3756,20 +3666,19 @@ app.post('/shipping/calculate-rates', requireAuth, async (req, res) => {
             couriers
         } = req.body;
 
-        const { data: profile, error: profileError } = await supabaseAdmin
-            .from('profiles')
-            .select('seller_address')
-            .eq('id', req.userId)
+        const { data: sellerAddress, error: addressError } = await supabaseAdmin
+            .from('shipping_addresses')
+            .select('*')
+            .eq('user_id', req.userId)
+            .eq('is_default', true)
             .single();
 
-        if (profileError || !profile || !profile.seller_address) {
+        if (addressError || !sellerAddress) {
             return res.status(400).json({
                 success: false,
-                error: 'Seller address not set. Please set your address first.'
+                error: 'Seller origin address not set. Please add your default address first.'
             });
         }
-
-        const sellerAddress = profile.seller_address;
 
         if (!destination_postal_code && (!destination_latitude || !destination_longitude)) {
             return res.status(400).json({
