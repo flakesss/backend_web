@@ -1565,6 +1565,14 @@ app.get("/orders/:id", requireAuth, async (req, res) => {
           instagram_url,
           tiktok_url,
           facebook_url
+        ),
+        seller_address:shipping_addresses!orders_seller_address_id_fkey (
+          id,
+          full_address,
+          city,
+          province,
+          postal_code,
+          country
         )
       `)
             .eq("id", id)
@@ -1601,6 +1609,8 @@ app.get("/orders/number/:orderNumber", async (req, res) => {
         status,
         buyer_id,
         seller_id,
+        seller_postal_code,
+        seller_address_id,
         created_at,
         seller:profiles!orders_seller_id_fkey (
           id,
@@ -1610,6 +1620,14 @@ app.get("/orders/number/:orderNumber", async (req, res) => {
           instagram_url,
           tiktok_url,
           facebook_url
+        ),
+        seller_address:shipping_addresses!orders_seller_address_id_fkey (
+          id,
+          full_address,
+          city,
+          province,
+          postal_code,
+          country
         )
       `)
             .eq("order_number", orderNumber)
@@ -4171,7 +4189,7 @@ app.delete('/shipping-addresses/:id', requireAuth, async (req, res) => {
 // Calculate shipping rates using Biteship API
 app.post('/shipping/calculate-rates', requireAuth, async (req, res) => {
     try {
-        const { origin_postal_code, destination_postal_code, couriers = 'jne,jnt,sicepat,anteraja', items } = req.body;
+        const { origin_postal_code, destination_postal_code, couriers = 'jne,jnt,sicepat,anteraja,tiki,ninja,sap,paxel,grab,gosend,idexpress', items } = req.body;
 
         if (!origin_postal_code || !destination_postal_code) {
             return res.status(400).json({ success: false, error: 'Postal code wajib diisi' });
