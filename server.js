@@ -1573,6 +1573,16 @@ app.get("/orders/:id", requireAuth, async (req, res) => {
           province,
           postal_code,
           country
+        ),
+        buyer_address:shipping_addresses!orders_buyer_address_id_fkey (
+          id,
+          recipient_name,
+          phone_number,
+          full_address,
+          city,
+          province,
+          postal_code,
+          country
         )
       `)
             .eq("id", id)
@@ -2169,9 +2179,33 @@ app.patch("/admin/payment-proofs/:id", requireAuth, requireAdmin, async (req, re
 
         // If approved, update order and payment status
         if (action === "approve") {
+            // Prepare order update data
+            const orderUpdate = { status: "paid" };
+            
+            // Extract shipping info from payment metadata if available
+            if (proof.payment?.metadata) {
+                try {
+                    const metadata = typeof proof.payment.metadata === 'string' 
+                        ? JSON.parse(proof.payment.metadata) 
+                        : proof.payment.metadata;
+                    
+                    if (metadata.selectedAddressId) {
+                        orderUpdate.buyer_address_id = metadata.selectedAddressId;
+                    }
+                    if (metadata.selectedCourier) {
+                        orderUpdate.courier_code = metadata.selectedCourier.courier_code;
+                        orderUpdate.courier_service = metadata.selectedCourier.service;
+                        orderUpdate.courier_price = metadata.selectedCourier.price;
+                        orderUpdate.courier_eta = metadata.selectedCourier.eta;
+                    }
+                } catch (e) {
+                    console.error('Error parsing payment metadata:', e);
+                }
+            }
+            
             await supabaseAdmin
                 .from("orders")
-                .update({ status: "paid" })
+                .update(orderUpdate)
                 .eq("id", proof.order_id);
 
             await supabaseAdmin
@@ -2237,6 +2271,49 @@ app.patch("/admin/payment-proofs/:id", requireAuth, requireAdmin, async (req, re
     } catch (err) {
         console.error("Admin update payment proof error:", err);
         res.status(500).json({ error: "Failed to update payment proof" });
+    }
+});
+
+// Update payment metadata (for storing shipping info)
+app.patch('/payments/:paymentId/metadata', requireAuth, async (req, res) => {
+    const { paymentId } = req.params;
+    const { metadata } = req.body;
+
+    try {
+        // Verify payment exists and belongs to  user (via order)
+        const { data: payment, error: fetchError } = await supabaseAdmin
+            .from('payments')
+            .select('id, order_id, orders(buyer_id, seller_id)')
+            .eq('id', paymentId)
+            .single();
+
+        if (fetchError || !payment) {
+            return res.status(404).json({ error: 'Payment not found' });
+        }
+
+        // Check if user is buyer or seller
+        const order = payment.orders;
+        const isAuthorized = order.buyer_id === req.user.id || order.seller_id === req.user.id;
+
+        if (!isAuthorized) {
+            return res.status(403).json({ error: 'Unauthorized' });
+        }
+
+        // Update payment metadata
+        const { error: updateError } = await supabaseAdmin
+            .from('payments')
+            .update({ metadata })
+            .eq('id', paymentId);
+
+        if (updateError) {
+            console.error('Update payment metadata error:', updateError);
+            throw updateError;
+        }
+
+        res.json({ success: true, message: 'Payment metadata updated' });
+    } catch (err) {
+        console.error('Update payment metadata error:', err);
+        res.status(500).json({ error: 'Failed to update payment metadata' });
     }
 });
 
