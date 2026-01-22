@@ -2156,7 +2156,7 @@ app.patch("/admin/payment-proofs/:id", requireAuth, requireAdmin, async (req, re
         // Get payment proof details first
         const { data: proof, error: fetchError } = await supabaseAdmin
             .from("payment_proofs")
-            .select("*, order:orders(*), payment:payments(*)")
+            .select("*, order:orders(*), payment:payments(id, status, amount, metadata)")
             .eq("id", id)
             .single();
 
@@ -2182,6 +2182,14 @@ app.patch("/admin/payment-proofs/:id", requireAuth, requireAdmin, async (req, re
             // Prepare order update data
             const orderUpdate = { status: "paid" };
             
+            // DEBUG: Log payment metadata
+            console.log('🔍 Payment metadata check:', {
+                hasPayment: !!proof.payment,
+                hasMetadata: !!proof.payment?.metadata,
+                metadataType: typeof proof.payment?.metadata,
+                metadataValue: proof.payment?.metadata
+            });
+            
             // Extract shipping info from payment metadata if available
             if (proof.payment?.metadata) {
                 try {
@@ -2189,19 +2197,32 @@ app.patch("/admin/payment-proofs/:id", requireAuth, requireAdmin, async (req, re
                         ? JSON.parse(proof.payment.metadata) 
                         : proof.payment.metadata;
                     
+                    console.log('📦 Extracted metadata:', metadata);
+                    
                     if (metadata.selectedAddressId) {
                         orderUpdate.buyer_address_id = metadata.selectedAddressId;
+                        console.log('✅ Setting buyer_address_id:', metadata.selectedAddressId);
                     }
                     if (metadata.selectedCourier) {
                         orderUpdate.courier_code = metadata.selectedCourier.courier_code;
                         orderUpdate.courier_service = metadata.selectedCourier.service;
                         orderUpdate.courier_price = metadata.selectedCourier.price;
                         orderUpdate.courier_eta = metadata.selectedCourier.eta;
+                        console.log('✅ Setting courier info:', {
+                            code: metadata.selectedCourier.courier_code,
+                            service: metadata.selectedCourier.service,
+                            price: metadata.selectedCourier.price,
+                            eta: metadata.selectedCourier.eta
+                        });
                     }
                 } catch (e) {
-                    console.error('Error parsing payment metadata:', e);
+                    console.error('❌ Error parsing payment metadata:', e);
                 }
+            } else {
+                console.log('⚠️ No payment metadata found - shipping info will not be saved');
             }
+            
+            console.log('📝 Final orderUpdate:', orderUpdate);
             
             await supabaseAdmin
                 .from("orders")
