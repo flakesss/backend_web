@@ -1626,7 +1626,6 @@ app.get("/orders/number/:orderNumber", async (req, res) => {
         courier_service,
         courier_price,
         courier_eta,
-        photos,
         created_at,
         seller:profiles!orders_seller_id_fkey (
           id,
@@ -1666,6 +1665,25 @@ app.get("/orders/number/:orderNumber", async (req, res) => {
             throw error;
         }
 
+        // Fetch order evidence photos
+        let photos = [];
+        try {
+            const { data: evidences } = await supabaseAdmin
+                .from('order_evidences')
+                .select('photo_url')
+                .eq('order_id', data.id)
+                .eq('is_deleted', false)
+                .order('upload_order', { ascending: true })
+                .order('created_at', { ascending: true });
+            
+            if (evidences && evidences.length > 0) {
+                photos = evidences.map(e => e.photo_url);
+            }
+        } catch (evidenceError) {
+            console.error('Error fetching order evidences:', evidenceError);
+            // Don't fail the whole request, just continue without photos
+        }
+
         // Return order info with complete details
         res.json({
             order_id: data.id,
@@ -1682,7 +1700,7 @@ app.get("/orders/number/:orderNumber", async (req, res) => {
             courier_service: data.courier_service,
             courier_price: data.courier_price,
             courier_eta: data.courier_eta,
-            photos: data.photos
+            photos: photos
         });
     } catch (err) {
         console.error("Get order by number error:", err);
