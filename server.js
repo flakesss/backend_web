@@ -1621,6 +1621,12 @@ app.get("/orders/number/:orderNumber", async (req, res) => {
         seller_id,
         seller_postal_code,
         seller_address_id,
+        buyer_address_id,
+        courier_code,
+        courier_service,
+        courier_price,
+        courier_eta,
+        photos,
         created_at,
         seller:profiles!orders_seller_id_fkey (
           id,
@@ -1638,6 +1644,16 @@ app.get("/orders/number/:orderNumber", async (req, res) => {
           province,
           postal_code,
           country
+        ),
+        buyer_address:shipping_addresses!orders_buyer_address_id_fkey (
+          id,
+          recipient_name,
+          phone_number,
+          full_address,
+          city,
+          province,
+          postal_code,
+          country
         )
       `)
             .eq("order_number", orderNumber)
@@ -1650,7 +1666,7 @@ app.get("/orders/number/:orderNumber", async (req, res) => {
             throw error;
         }
 
-        // Return order info with seller details
+        // Return order info with complete details
         res.json({
             order_id: data.id,
             order_number: data.order_number,
@@ -1660,7 +1676,13 @@ app.get("/orders/number/:orderNumber", async (req, res) => {
             status: data.status,
             buyer_id: data.buyer_id,
             seller_id: data.seller_id,
-            seller: data.seller, // Include seller profile info
+            seller: data.seller,
+            buyer_address: data.buyer_address,
+            courier_code: data.courier_code,
+            courier_service: data.courier_service,
+            courier_price: data.courier_price,
+            courier_eta: data.courier_eta,
+            photos: data.photos
         });
     } catch (err) {
         console.error("Get order by number error:", err);
