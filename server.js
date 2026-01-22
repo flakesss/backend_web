@@ -1670,14 +1670,14 @@ app.get("/orders/number/:orderNumber", async (req, res) => {
         try {
             const { data: evidences } = await supabaseAdmin
                 .from('order_evidences')
-                .select('photo_url')
+                .select('image_url')
                 .eq('order_id', data.id)
                 .eq('is_deleted', false)
                 .order('upload_order', { ascending: true })
                 .order('created_at', { ascending: true });
             
             if (evidences && evidences.length > 0) {
-                photos = evidences.map(e => e.photo_url);
+                photos = evidences.map(e => e.image_url);
             }
         } catch (evidenceError) {
             console.error('Error fetching order evidences:', evidenceError);
